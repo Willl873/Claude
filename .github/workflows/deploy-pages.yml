@@ -2,7 +2,9 @@ name: Deploy screen-ruler to GitHub Pages
 
 on:
   push:
-    branches: [claude/dazzling-allen-umcddy]
+    branches:
+      - claude/dazzling-allen-umcddy
+      - claude/financial-analyst-skill-setup-idqr6v
   workflow_dispatch:
 
 permissions:
