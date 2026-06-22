@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Actual Size Ruler — Measure anything on your screen</title>
+  <meta name="description" content="A free, accurate on-screen ruler in cm, mm, and inches. Calibrate once with a credit card and measure real objects against your display." />
+  <meta name="color-scheme" content="light dark" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📏</text></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__icon" aria-hidden="true">📏</span>
+      <h1 class="brand__title">Actual Size Ruler</h1>
+    </div>
+
+    <div class="toolbar" role="toolbar" aria-label="Ruler controls">
+      <div class="seg" role="group" aria-label="Units">
+        <button class="seg__btn is-active" data-unit="cm" type="button">cm</button>
+        <button class="seg__btn" data-unit="inch" type="button">inch</button>
+      </div>
+
+      <div class="seg" role="group" aria-label="Orientation">
+        <button class="seg__btn is-active" data-orient="horizontal" type="button" title="Horizontal ruler">↔</button>
+        <button class="seg__btn" data-orient="vertical" type="button" title="Vertical ruler">↕</button>
+      </div>
+
+      <label class="check" title="Snap markers to the nearest millimetre">
+        <input type="checkbox" id="snapToggle" />
+        <span>Snap</span>
+      </label>
+
+      <button class="btn" id="calibrateBtn" type="button">
+        <span aria-hidden="true">🎯</span> Calibrate
+      </button>
+
+      <button class="btn btn--ghost" id="themeBtn" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
+      <button class="btn btn--ghost" id="fullscreenBtn" type="button" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
+      <button class="btn btn--ghost" id="helpBtn" type="button" title="Help" aria-label="Help">?</button>
+    </div>
+  </header>
+
+  <!-- Calibration reminder shown until the user calibrates -->
+  <div class="notice" id="calibNotice" hidden>
+    <span>For accurate results, <button class="linklike" id="noticeCalibBtn" type="button">calibrate your screen</button> once with a credit card.</span>
+    <button class="notice__close" id="noticeClose" type="button" aria-label="Dismiss">×</button>
+  </div>
+
+  <main class="stage" id="stage">
+    <div class="ruler-wrap" id="rulerWrap">
+      <canvas id="ruler" class="ruler-canvas"></canvas>
+
+      <!-- Draggable measurement markers -->
+      <div class="marker marker--a" id="markerA" tabindex="0" role="slider"
+           aria-label="Marker A position" aria-valuemin="0" aria-valuenow="0">
+        <span class="marker__label">A</span>
+      </div>
+      <div class="marker marker--b" id="markerB" tabindex="0" role="slider"
+           aria-label="Marker B position" aria-valuemin="0" aria-valuenow="0">
+        <span class="marker__label">B</span>
+      </div>
+    </div>
+
+    <!-- Live measurement readout -->
+    <div class="readout" id="readout" aria-live="polite">
+      <div class="readout__main">
+        <span class="readout__value" id="distValue">0.0</span>
+        <span class="readout__unit" id="distUnit">cm</span>
+      </div>
+      <div class="readout__detail">
+        <span>A&nbsp;<b id="posA">0</b></span>
+        <span>B&nbsp;<b id="posB">0</b></span>
+        <button class="btn btn--tiny" id="resetMarkers" type="button">Reset markers</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Calibration dialog -->
+  <div class="modal" id="calibModal" hidden>
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="calibTitle">
+      <button class="modal__close" data-close type="button" aria-label="Close">×</button>
+      <h2 id="calibTitle">Calibrate your screen</h2>
+      <p class="muted">
+        Hold a real object against the screen and resize the outline below until they
+        match exactly. This makes every measurement physically accurate.
+      </p>
+
+      <label class="field">
+        <span>Reference object</span>
+        <select id="refSelect">
+          <option value="85.60">Credit / debit card (85.6&nbsp;mm)</option>
+          <option value="155.956">US dollar bill (156&nbsp;mm)</option>
+          <option value="120">CD / DVD diameter (120&nbsp;mm)</option>
+          <option value="215.9">US Letter paper width (216&nbsp;mm)</option>
+          <option value="210">A4 paper width (210&nbsp;mm)</option>
+        </select>
+      </label>
+
+      <div class="calib-stage">
+        <div class="calib-card" id="calibCard">
+          <div class="calib-card__chip"></div>
+          <div class="calib-card__width" id="calibWidthLabel"></div>
+        </div>
+      </div>
+
+      <input type="range" id="calibSlider" class="calib-slider" min="120" max="900" step="0.5" />
+
+      <div class="calib-meta">
+        <span>Detected: <b id="calibPpi">96</b> PPI</span>
+        <button class="linklike" id="calibReset" type="button">Reset to default (96&nbsp;PPI)</button>
+      </div>
+
+      <details class="advanced">
+        <summary>Enter PPI manually</summary>
+        <label class="field field--inline">
+          <span>Pixels per inch</span>
+          <input type="number" id="ppiInput" min="30" max="1200" step="0.1" />
+        </label>
+      </details>
+
+      <div class="modal__actions">
+        <button class="btn btn--ghost" data-close type="button">Cancel</button>
+        <button class="btn btn--primary" id="calibSave" type="button">Save calibration</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help dialog -->
+  <div class="modal" id="helpModal" hidden>
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+      <button class="modal__close" data-close type="button" aria-label="Close">×</button>
+      <h2 id="helpTitle">How to use</h2>
+      <ol class="help-list">
+        <li><b>Calibrate once.</b> Tap <em>Calibrate</em> and match the outline to a credit card so the ruler shows true size.</li>
+        <li><b>Measure.</b> Line your object up with the ruler, then drag markers <em>A</em> and <em>B</em> to its ends. The distance shows below.</li>
+        <li><b>Be precise.</b> Click anywhere on the ruler to jump the nearest marker there, or focus a marker and use the arrow keys (hold Shift for bigger steps).</li>
+        <li><b>Switch it up.</b> Toggle cm/inch, flip between horizontal and vertical, and turn on <em>Snap</em> for whole-millimetre steps.</li>
+      </ol>
+      <p class="muted">Your calibration is saved on this device, so you only do it once per screen.</p>
+      <div class="modal__actions">
+        <button class="btn btn--primary" data-close type="button">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>Calibrated for this device · <b id="footPpi">96 PPI</b></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
