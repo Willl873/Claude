@@ -7,6 +7,7 @@ import SwiftUI
 /// spacing is physically accurate on the glass.
 struct RulerView: View {
     let unit: MeasurementUnit
+    let theme: Theme
 
     var body: some View {
         Canvas { context, size in
@@ -20,7 +21,7 @@ struct RulerView: View {
         let step = pointsPerUnit / Double(subdivisions)
         guard step > 0.5 else { return } // guard against degenerate calibration
 
-        let tickColor = Color.primary
+        let tickColor = theme.tick
         let baselineX: CGFloat = 0
 
         // Tick lengths grow with significance.
@@ -51,7 +52,7 @@ struct RulerView: View {
                 let whole = index / subdivisions
                 let text = Text("\(whole)")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundColor(tickColor)
+                    .foregroundColor(theme.label)
                 context.draw(text, at: CGPoint(x: baselineX + majorLen + 12, y: y), anchor: .leading)
             }
 
@@ -62,7 +63,7 @@ struct RulerView: View {
         // Unit caption near the origin.
         let caption = Text(unit.label.uppercased())
             .font(.system(size: 11, weight: .heavy, design: .rounded))
-            .foregroundColor(tickColor.opacity(0.6))
+            .foregroundColor(theme.caption)
         context.draw(caption, at: CGPoint(x: baselineX + 6, y: 10), anchor: .leading)
     }
 

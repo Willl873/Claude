@@ -77,9 +77,41 @@ enum DeviceCalibration {
         ppiByIdentifier[modelIdentifier] == nil
     }
 
-    /// Logical points that span exactly one inch on this display.
+    // MARK: - Manual calibration override
+
+    /// UserDefaults key for a user‑provided points‑per‑inch value, set via the
+    /// "match a card" calibration screen. Read by `@AppStorage` in the UI so the
+    /// ruler refreshes immediately when it changes.
+    static let manualCalibrationKey = "manualPointsPerInch"
+
+    /// A user‑measured points‑per‑inch value, or `nil` when using automatic
+    /// calibration. Stored in logical points so it is orientation‑independent.
+    static var manualPointsPerInch: Double? {
+        get {
+            let value = UserDefaults.standard.double(forKey: manualCalibrationKey)
+            return value > 0 ? value : nil
+        }
+        set {
+            if let value = newValue, value > 0 {
+                UserDefaults.standard.set(value, forKey: manualCalibrationKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: manualCalibrationKey)
+            }
+        }
+    }
+
+    /// `true` when the ruler is using a value the user dialled in by hand.
+    static var isManuallyCalibrated: Bool {
+        manualPointsPerInch != nil
+    }
+
+    /// Logical points that span exactly one inch on this display. A manual
+    /// override always wins over the automatic device estimate.
     static var pointsPerInch: Double {
-        physicalPPI / Double(UIScreen.main.nativeScale)
+        if let manual = manualPointsPerInch {
+            return manual
+        }
+        return physicalPPI / Double(UIScreen.main.nativeScale)
     }
 
     /// Logical points that span exactly one centimeter on this display.

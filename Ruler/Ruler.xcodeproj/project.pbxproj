@@ -14,6 +14,8 @@
 		BB00000000000000000000005 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF00000000000000000000005 /* Models.swift */; };
 		BB00000000000000000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FF00000000000000000000006 /* Assets.xcassets */; };
 		BB00000000000000000000007 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FF00000000000000000000007 /* Preview Assets.xcassets */; };
+		BB00000000000000000000008 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF00000000000000000000009 /* Theme.swift */; };
+		BB00000000000000000000009 /* CalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF00000000000000000000010 /* CalibrationView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +27,8 @@
 		FF00000000000000000000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FF00000000000000000000007 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		FF00000000000000000000008 /* Ruler.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ruler.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FF00000000000000000000009 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		FF00000000000000000000010 /* CalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +58,8 @@
 				FF00000000000000000000003 /* RulerView.swift */,
 				FF00000000000000000000004 /* DeviceCalibration.swift */,
 				FF00000000000000000000005 /* Models.swift */,
+				FF00000000000000000000009 /* Theme.swift */,
+				FF00000000000000000000010 /* CalibrationView.swift */,
 				FF00000000000000000000006 /* Assets.xcassets */,
 				6600000000000000000000003 /* Preview Content */,
 			);
@@ -151,6 +157,8 @@
 				BB00000000000000000000003 /* RulerView.swift in Sources */,
 				BB00000000000000000000004 /* DeviceCalibration.swift in Sources */,
 				BB00000000000000000000005 /* Models.swift in Sources */,
+				BB00000000000000000000008 /* Theme.swift in Sources */,
+				BB00000000000000000000009 /* CalibrationView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -284,7 +292,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -312,7 +320,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

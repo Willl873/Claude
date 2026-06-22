@@ -10,14 +10,21 @@ is a real centimeter.
 
 - **Centimeters or inches** — toggle the unit at any time; ticks redraw at the
   correct physical spacing (1 mm ticks for cm, ⅛‑inch ticks for inches).
-- **Light & dark mode** — follows the system automatically, or force Light/Dark
-  from the in‑app control.
+- **Light & dark themes** — a hand‑tuned palette for each scheme (warm paper /
+  near‑black). Follows the system automatically, or force Light / Dark.
 - **Single & double markers** — drag a marker to read a distance from the top of
   the ruler, or use two markers to read the distance *between* them (shown as a
   live Δ badge).
+- **Freeze / lock** — tap the lock to freeze the markers so a reading can't be
+  nudged while you line things up or read the screen.
 - **Automatic calibration** — no manual setup. The app identifies the device
   model and uses its true physical PPI to lay out the scale accurately across the
   range of iPhone screen sizes.
+- **Manual calibration fallback** — for unknown / future devices (or to verify
+  any device), tap the ruler icon and resize the on‑screen outline to match a
+  standard credit / debit / ID card. The exact physical size of an ISO ID‑1 card
+  is used to derive points‑per‑inch.
+- **Portrait & landscape** — the scale and controls adapt to either orientation.
 - **Uses only the workable area** — the ruler's zero point sits at the top of the
   safe‑area rectangle, so the notch / Dynamic Island and home indicator never
   distort the measurement.
@@ -36,7 +43,10 @@ pointsPerCm   = pointsPerInch / 2.54
 Every tick and marker is positioned in logical points using these values, which
 makes the spacing physically accurate. Unknown / future models fall back to a
 density estimate based on the screen scale, and the UI notes when the value is an
-estimate.
+estimate. You can override it at any time with **manual calibration**: match the
+outline to a real ID‑1 card (85.60 mm long edge) and the app derives an exact
+`pointsPerInch`, stored as a logical‑point value so it stays correct in either
+orientation.
 
 ## Running
 
@@ -56,5 +66,7 @@ Deployment target: iOS 17.0.
 | `RulerApp.swift` | App entry point. |
 | `ContentView.swift` | Layout, draggable markers, and the control bar. |
 | `RulerView.swift` | Canvas that draws the calibrated tick scale. |
-| `DeviceCalibration.swift` | Device‑model → physical PPI lookup and conversions. |
+| `CalibrationView.swift` | "Match a card" manual calibration sheet. |
+| `DeviceCalibration.swift` | Device‑model → physical PPI lookup, manual override, conversions. |
+| `Theme.swift` | Light / dark color palettes. |
 | `Models.swift` | Unit, marker‑mode, and appearance enums. |
