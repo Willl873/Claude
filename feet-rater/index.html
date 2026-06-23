@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Sole — AI feet ratings, 0 to 10</title>
+  <meta name="description" content="Sole rates feet from 0 to 10 on proportions, shape, skin quality, skin tone and health. Upload a photo for an instant, elegant score — analysed privately in your browser, or with real Claude AI." />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#120c10" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦶</text></svg>" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">🦶</span>
+      <div class="brand__text">
+        <h1 class="brand__title">Sole</h1>
+        <p class="brand__tag">The art of the foot, scored 0–10</p>
+      </div>
+    </div>
+
+    <div class="topbar__stats" id="topStats">
+      <button class="chip" id="streakChip" type="button" title="Your daily rating streak">
+        <span aria-hidden="true">🔥</span> <span id="streakNum">0</span>-day streak
+      </button>
+      <button class="chip" id="bestChip" type="button" title="Your highest score yet">
+        <span aria-hidden="true">👑</span> Best <span id="bestNum">—</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- ===== Upload / intake ===== -->
+    <section class="card intake" id="intakeCard" aria-label="Upload a foot photo">
+      <div class="intake__head">
+        <h2 class="intake__title">Drop a foot. Get a verdict.</h2>
+        <div class="seg" role="group" aria-label="Rating engine">
+          <button class="seg__btn is-active" data-mode="local" type="button">On-device</button>
+          <button class="seg__btn" data-mode="ai" type="button">Claude&nbsp;AI</button>
+        </div>
+      </div>
+
+      <label class="dropzone" id="dropzone" tabindex="0">
+        <input type="file" id="fileInput" accept="image/*" hidden />
+        <div class="dropzone__inner">
+          <span class="dropzone__icon" aria-hidden="true">📸</span>
+          <span class="dropzone__primary">Tap to choose a photo</span>
+          <span class="dropzone__secondary">or drag &amp; drop · or paste from clipboard</span>
+        </div>
+      </label>
+
+      <div class="ai-panel" id="aiPanel" hidden>
+        <label class="ai-panel__label" for="apiKey">Anthropic API key <span class="muted">(stays in your browser)</span></label>
+        <div class="ai-panel__row">
+          <input type="password" id="apiKey" class="field" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
+          <button class="btn btn--ghost" id="forgetKey" type="button" title="Remove the saved key">Forget</button>
+        </div>
+        <p class="ai-panel__note">Claude Opus 4.8 looks at the photo directly and returns a real rating. The image and key are sent to Anthropic from your device only when you choose AI mode.</p>
+      </div>
+
+      <p class="intake__fineprint">
+        For fun &amp; entertainment only — not medical or cosmetic advice. Use photos of consenting adults (18+) that are yours to share.
+      </p>
+    </section>
+
+    <!-- ===== Analyzing ===== -->
+    <section class="card analyzing" id="analyzingCard" hidden aria-live="polite">
+      <div class="scanwrap">
+        <img id="scanImg" class="scanwrap__img" alt="The photo being analysed" />
+        <div class="scanline" aria-hidden="true"></div>
+        <div class="scangrid" aria-hidden="true"></div>
+      </div>
+      <p class="analyzing__status" id="analyzingStatus">Reading the pixels…</p>
+    </section>
+
+    <!-- ===== Result ===== -->
+    <section class="card result" id="resultCard" hidden aria-live="polite">
+      <div class="result__top">
+        <div class="result__thumbwrap">
+          <img id="resultImg" class="result__thumb" alt="Your rated foot" />
+          <span class="result__badge" id="engineBadge">On-device</span>
+        </div>
+
+        <div class="gauge">
+          <svg viewBox="0 0 140 140" class="gauge__svg" aria-hidden="true">
+            <circle class="gauge__track" cx="70" cy="70" r="60" />
+            <circle class="gauge__fill" id="gaugeFill" cx="70" cy="70" r="60" />
+          </svg>
+          <div class="gauge__center">
+            <span class="gauge__score" id="overallScore">0.0</span>
+            <span class="gauge__outof">/ 10</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="result__verdict" id="verdict">—</p>
+      <p class="result__grade" id="gradeLine"></p>
+
+      <ul class="bars" id="bars">
+        <!-- criterion rows injected -->
+      </ul>
+
+      <p class="result__confidence" id="confidenceLine" hidden></p>
+
+      <div class="result__actions">
+        <button class="btn btn--primary" id="againBtn" type="button">Rate another</button>
+        <button class="btn" id="shareBtn" type="button"><span aria-hidden="true">✨</span> Share card</button>
+      </div>
+    </section>
+
+    <!-- ===== History ===== -->
+    <section class="history" id="historySection" hidden>
+      <div class="history__head">
+        <h2 class="history__title">Your gallery</h2>
+        <button class="link" id="clearHistory" type="button">Clear</button>
+      </div>
+      <div class="history__strip" id="historyStrip"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Made for the curious. Your photos never leave your device in on-device mode.</span>
+  </footer>
+
+  <!-- ===== First-run consent ===== -->
+  <div class="modal" id="consentModal" hidden role="dialog" aria-modal="true" aria-labelledby="consentTitle">
+    <div class="modal__panel">
+      <span class="modal__icon" aria-hidden="true">🦶</span>
+      <h2 class="modal__title" id="consentTitle">Welcome to Sole</h2>
+      <p class="modal__body">
+        A playful little rater for feet. Before you start:
+      </p>
+      <ul class="modal__list">
+        <li>This is <strong>entertainment</strong>, not medical, cosmetic, or any other advice.</li>
+        <li>Only upload photos of <strong>adults (18+)</strong> who consent, that are yours to use.</li>
+        <li>On-device mode analyses photos <strong>locally</strong> — they’re never uploaded.</li>
+      </ul>
+      <button class="btn btn--primary modal__cta" id="consentAccept" type="button">I’m 18+ and I agree</button>
+    </div>
+  </div>
+
+  <!-- hidden canvas for share-card rendering -->
+  <canvas id="shareCanvas" width="1080" height="1350" hidden></canvas>
+
+  <script src="app.js"></script>
+</body>
+</html>

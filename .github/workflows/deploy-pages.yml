@@ -1,4 +1,4 @@
-name: Deploy screen-ruler to GitHub Pages
+name: Deploy feet-rater to GitHub Pages
 
 on:
   push:
@@ -33,11 +33,11 @@ jobs:
           # Create the Pages site automatically if it isn't enabled yet.
           enablement: true
 
-      - name: Upload the ruler app as the site
+      - name: Upload the feet-rater app as the site
         uses: actions/upload-pages-artifact@v3
         with:
-          # Publish the screen-ruler folder so index.html sits at the site root.
-          path: screen-ruler
+          # Publish the feet-rater folder so index.html sits at the site root.
+          path: feet-rater
 
       - name: Deploy to GitHub Pages
         id: deployment
