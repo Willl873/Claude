@@ -29,6 +29,7 @@ const els = {
   overallScore: $("#overallScore"),
   verdict: $("#verdict"),
   gradeLine: $("#gradeLine"),
+  observations: $("#observations"),
   bars: $("#bars"),
   confidenceLine: $("#confidenceLine"),
   againBtn: $("#againBtn"),
@@ -92,12 +93,16 @@ function boot() {
   });
 
   // intake interactions
-  els.dropzone.addEventListener("click", () => els.fileInput.click());
+  // NOTE: the dropzone is a <label> wrapping #fileInput, so a tap opens the
+  // picker natively on iOS/Android. We deliberately do NOT also call
+  // fileInput.click() here — doing both double-fires the gesture and iOS then
+  // opens nothing. Keyboard users still get a programmatic open via keydown.
   els.dropzone.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); els.fileInput.click(); }
   });
   els.fileInput.addEventListener("change", (e) => {
-    if (e.target.files[0]) handleFile(e.target.files[0]);
+    const f = e.target.files && e.target.files[0];
+    if (f) handleFile(f);
   });
   ["dragenter", "dragover"].forEach((ev) =>
     els.dropzone.addEventListener(ev, (e) => { e.preventDefault(); els.dropzone.classList.add("is-drag"); })
@@ -134,36 +139,60 @@ function setMode(mode) {
 /* Intake -> analyze                                                     */
 /* ===================================================================== */
 async function handleFile(file) {
-  if (!file || !file.type.startsWith("image/")) {
+  // Some Android gallery pickers hand back a blank MIME type — accept by
+  // extension too rather than rejecting a real photo.
+  const looksImage = file && (
+    (file.type && file.type.startsWith("image/")) ||
+    /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test(file.name || "")
+  );
+  if (!looksImage) {
     alert("That doesn't look like an image. Try a JPG or PNG.");
+    els.fileInput.value = "";
     return;
   }
   if (state.mode === "ai" && !els.apiKey.value.trim()) {
     alert("Paste your Anthropic API key to use Claude AI mode — or switch to On-device.");
+    els.fileInput.value = "";
     return;
   }
 
-  const dataUrl = await fileToDataUrl(file);
-  const img = await loadImage(dataUrl);
+  let dataUrl;
+  try {
+    dataUrl = await fileToDataUrl(file);
+  } catch {
+    alert("Couldn't read that file. Please try another photo.");
+    els.fileInput.value = "";
+    return;
+  }
 
   // go to analyzing screen
   els.scanImg.src = dataUrl;
   show(els.analyzing);
   hide(els.intake);
+  els.fileInput.value = ""; // reset so picking the same photo again still fires `change`
 
   let scores;
   try {
     if (state.mode === "ai") {
-      cycleStatus(["Sending to Claude…", "Claude is looking closely…", "Forming a verdict…"]);
+      cycleStatus(["Sending to Claude…", "Claude is studying the photo…", "Weighing each feature…", "Forming a verdict…"]);
       scores = await analyzeWithClaude(file, dataUrl);
     } else {
-      cycleStatus(["Reading the pixels…", "Detecting skin tones…", "Measuring proportions…", "Scoring…"]);
-      await delay(900); // let the scan animation breathe
-      scores = analyzeLocally(img);
+      cycleStatus(["Reading the pixels…", "Detecting skin tones…", "Tracing the silhouette…", "Scoring…"]);
+      const bitmap = await decodeForAnalysis(file, dataUrl);
+      await delay(700); // let the scan animation breathe
+      scores = analyzeLocally(bitmap);
     }
   } catch (err) {
     stopStatus();
-    alert("Couldn't analyse that one.\n\n" + (err?.message || err));
+    let msg;
+    if (err && err.notFeet) msg = err.message;
+    else if (err && err.decode) {
+      msg = "This photo couldn't be read in your browser — iPhone HEIC photos often need converting. " +
+            "Try saving it as JPG/PNG, or use Claude AI mode.";
+    } else {
+      msg = "Couldn't analyse that one.\n\n" + (err && err.message ? err.message : err);
+    }
+    alert(msg);
     reset();
     return;
   }
@@ -197,6 +226,21 @@ function stopStatus() { if (statusTimer) clearInterval(statusTimer); statusTimer
 /* ===================================================================== */
 /* On-device analysis                                                    */
 /* ===================================================================== */
+/* Decode a file to a drawable image for analysis. Prefer createImageBitmap,
+ * which is fast and applies EXIF orientation (phone photos are often rotated).
+ * Falls back to <img>; throws {decode:true} if the browser can't read it
+ * (e.g. HEIC in Chrome) so the caller can show a helpful message. */
+async function decodeForAnalysis(file, dataUrl) {
+  if (window.createImageBitmap) {
+    try { return await createImageBitmap(file, { imageOrientation: "from-image" }); }
+    catch {
+      try { return await createImageBitmap(file); } catch {}
+    }
+  }
+  try { return await loadImage(dataUrl); }
+  catch { const e = new Error("decode failed"); e.decode = true; throw e; }
+}
+
 function analyzeLocally(img) {
   const MAX = 224;
   const scale = Math.min(1, MAX / Math.max(img.width, img.height));
@@ -207,6 +251,7 @@ function analyzeLocally(img) {
   const ctx = c.getContext("2d", { willReadFrequently: true });
   ctx.drawImage(img, 0, 0, w, h);
   const { data } = ctx.getImageData(0, 0, w, h);
+  if (img.close) img.close(); // free the decoded bitmap
 
   const skin = new Uint8Array(w * h);
   const lum = new Float32Array(w * h);
@@ -273,35 +318,45 @@ function analyzeLocally(img) {
   // --- symmetry along the longer axis (downsampled mask) ---
   const sym = symmetryScore(skin, w, h, minX, minY, bw, bh, bw >= bh);
 
-  /* ---- map raw metrics to 0..10 ---- */
-  // proportions: ideal elongation ~2.0-2.7, decent fill
-  const elongScore = elong <= 2.4
-    ? mapRange(elong, 1.0, 2.4, 5.4, 9.6)
-    : mapRange(elong, 2.4, 4.2, 9.6, 6.0);
-  const fillScore = mapRange(fill, 0.32, 0.62, 6.0, 9.4);
-  const proportions = clampScore(0.62 * elongScore + 0.38 * fillScore);
+  // --- contour roughness: jaggedness of the silhouette edge. Bumps, swelling,
+  //     crooked/overlapping toes and other irregularities raise this, so it
+  //     acts as a deformity proxy. ~0.006 (smooth) .. ~0.06 (very irregular) ---
+  const roughness = contourRoughness(skin, w, h, minX, maxX, minY, maxY);
 
-  // shape: symmetry-led, lifted by clean fill
-  const shape = clampScore(0.7 * mapRange(sym, 0.45, 0.9, 5.0, 9.8) + 0.3 * fillScore);
+  /* ---- map raw metrics to 0..10 (wide, discriminating band) ---- */
+  const smoothContour = mapRange(roughness, 0.006, 0.055, 9.6, 2.0); // smooth edge -> high
+
+  // proportions: elongation in an aesthetic range, solid fill, clean outline
+  const elongScore = elong <= 2.4
+    ? mapRange(elong, 1.0, 2.4, 3.8, 9.6)
+    : mapRange(elong, 2.4, 4.6, 9.6, 3.2);
+  const fillScore = mapRange(fill, 0.28, 0.64, 3.4, 9.4);
+  const proportions = clampScore(0.55 * elongScore + 0.25 * fillScore + 0.20 * smoothContour);
+
+  // shape: symmetry + a smooth, deformity-free outline
+  const symScore = mapRange(sym, 0.42, 0.92, 2.8, 9.8);
+  const shape = clampScore(0.45 * symScore + 0.40 * smoothContour + 0.15 * fillScore);
 
   // skin quality: smoother => higher
-  const skinQuality = clampScore(mapRange(texture, 16, 3.5, 5.0, 9.8));
+  const skinQuality = clampScore(mapRange(texture, 18, 3.0, 2.4, 9.8));
 
-  // skin tone: more even => higher; light penalty for extreme exposure spread
-  const tone = mapRange(toneSpread, 14, 3.5, 5.2, 9.7);
-  const exposurePenalty = mapRange(stdL, 78, 38, -1.2, 0);
+  // skin tone: more even => higher; penalty for harsh exposure spread
+  const tone = mapRange(toneSpread, 15, 3.0, 2.8, 9.7);
+  const exposurePenalty = mapRange(stdL, 84, 36, -1.8, 0);
   const skinColor = clampScore(tone + exposurePenalty);
 
-  // health: evenness + smoothness + healthy warmth (Cr not too high) + good light
-  const warmth = mapRange(Math.abs(meanCr - 150), 26, 4, 6.0, 9.4); // closeness to healthy red-chroma
-  const brightness = meanL >= 90 && meanL <= 200
-    ? mapRange(Math.abs(meanL - 150), 60, 0, 7.0, 9.6)
-    : mapRange(Math.min(Math.abs(meanL - 90), Math.abs(meanL - 200)), 0, 50, 7.0, 4.8);
-  const health = clampScore(0.34 * skinQuality + 0.26 * skinColor + 0.22 * warmth + 0.18 * brightness);
+  // health: skin + tone + healthy warmth + contour integrity + good light
+  const warmth = mapRange(Math.abs(meanCr - 150), 30, 4, 4.2, 9.4);
+  const brightness = (meanL >= 85 && meanL <= 205)
+    ? mapRange(Math.abs(meanL - 150), 65, 0, 6.0, 9.6)
+    : mapRange(Math.min(Math.abs(meanL - 85), Math.abs(meanL - 205)), 0, 55, 6.0, 3.2);
+  const health = clampScore(
+    0.30 * skinQuality + 0.22 * skinColor + 0.18 * warmth + 0.16 * smoothContour + 0.14 * brightness
+  );
 
   const scores = { proportions, shape, skinQuality, skinColor, health };
   scores.overall = clampScore(
-    0.20 * proportions + 0.20 * shape + 0.25 * skinQuality + 0.15 * skinColor + 0.20 * health
+    0.18 * proportions + 0.22 * shape + 0.24 * skinQuality + 0.14 * skinColor + 0.22 * health
   );
   scores.confidence = confidence;
   scores.verdict = pickVerdict(scores.overall, scores, confidence);
@@ -333,6 +388,32 @@ function symmetryScore(skin, w, h, minX, minY, bw, bh, horizontalAxis) {
   return uni ? inter / uni : 0.6;
 }
 
+/* Roughness of the foot silhouette: for each row, take the left/right edge of
+ * the skin region, then average the second difference (curvature) of those
+ * edges down the rows. A clean foot edge is locally straight (small values);
+ * lumps, bumps and irregular/deformed outlines spike it. Normalised by width. */
+function contourRoughness(skin, w, h, minX, maxX, minY, maxY) {
+  const bw = Math.max(1, maxX - minX);
+  const left = [], right = [];
+  for (let y = minY; y <= maxY; y++) {
+    let l = -1, r = -1;
+    for (let x = minX; x <= maxX; x++) {
+      if (skin[y * w + x]) { if (l < 0) l = x; r = x; }
+    }
+    left.push(l); right.push(r);
+  }
+  let sum = 0, n = 0;
+  for (let i = 1; i < left.length - 1; i++) {
+    if (left[i - 1] >= 0 && left[i] >= 0 && left[i + 1] >= 0) {
+      sum += Math.abs(left[i - 1] - 2 * left[i] + left[i + 1]); n++;
+    }
+    if (right[i - 1] >= 0 && right[i] >= 0 && right[i + 1] >= 0) {
+      sum += Math.abs(right[i - 1] - 2 * right[i] + right[i + 1]); n++;
+    }
+  }
+  return n ? (sum / n) / bw : 0.02;
+}
+
 /* ===================================================================== */
 /* Claude AI analysis                                                    */
 /* ===================================================================== */
@@ -344,31 +425,49 @@ async function analyzeWithClaude(file, dataUrl) {
   const schema = {
     type: "object",
     properties: {
-      is_feet: { type: "boolean", description: "true only if the image clearly shows human foot/feet of an adult" },
-      proportions: { type: "number" },
-      foot_shape: { type: "number" },
-      skin_quality: { type: "number" },
-      skin_color: { type: "number" },
-      health: { type: "number" },
-      overall: { type: "number" },
-      verdict: { type: "string", description: "one witty but kind sentence, under 18 words" },
+      is_feet: { type: "boolean", description: "true only if the image clearly shows the bare foot/feet of an adult human" },
+      observations: {
+        type: "array",
+        items: { type: "string" },
+        description: "2 to 4 short, specific visual observations grounding the scores (toe alignment, nails, skin condition, proportions, and any deformities or blemishes)",
+      },
+      proportions: { type: "number", description: "0-10: toe-length gradient, foot-to-toe ratio, balance" },
+      foot_shape: { type: "number", description: "0-10: arch, toe alignment/straightness, symmetry, absence of deformities" },
+      skin_quality: { type: "number", description: "0-10: smoothness; penalize calluses, cracks, blisters, scars, dryness" },
+      skin_color: { type: "number", description: "0-10: evenness and healthiness of tone" },
+      health: { type: "number", description: "0-10: nail condition and vitality; penalize discoloration, swelling, fungal/ingrown nails" },
+      overall: { type: "number", description: "0-10 holistic judgement, not a strict average" },
+      verdict: { type: "string", description: "one vivid, honest sentence under 18 words; specific, never cruel" },
     },
-    required: ["is_feet", "proportions", "foot_shape", "skin_quality", "skin_color", "health", "overall", "verdict"],
+    required: ["is_feet", "observations", "proportions", "foot_shape", "skin_quality", "skin_color", "health", "overall", "verdict"],
     additionalProperties: false,
   };
 
   const prompt =
-    "You are Sole, a playful but fair judge of feet for an entertainment app. " +
-    "Rate the foot in this photo from 0 to 10 (one decimal place) on five criteria: " +
-    "proportions, foot_shape, skin_quality, skin_color (evenness/healthiness of tone), and health. " +
-    "Give an 'overall' that reflects the blend. Keep the verdict light, specific, and never cruel. " +
-    "If the image does not clearly show the feet of an adult, set is_feet=false, all scores to 0, " +
-    "and put a gentle note in 'verdict'.";
+    "You are Sole, an expert and discerning judge of feet for an entertainment app. " +
+    "Examine the photo carefully before scoring. First record 2-4 concrete visual observations, then rate.\n\n" +
+    "Score each criterion from 0 to 10 (one decimal) and judge each one INDEPENDENTLY:\n" +
+    "• proportions — toe-length gradient, foot-to-toe ratio, overall balance.\n" +
+    "• foot_shape — arch, toe alignment and straightness, left/right symmetry, and the ABSENCE of deformities " +
+    "(bunions, hammertoe, overlapping or crooked toes, splayed or misshapen structure).\n" +
+    "• skin_quality — smoothness; penalize calluses, corns, cracked heels, dryness, blisters, scars.\n" +
+    "• skin_color — evenness and healthiness of tone; penalize blotchiness, bruising, heavy redness.\n" +
+    "• health — nail condition and overall vitality; penalize discoloured/fungal/ingrown nails, swelling, inflammation.\n\n" +
+    "CALIBRATION — use the FULL 0-10 range and spread your scores; do NOT cluster around 6-8:\n" +
+    "  9-10 = exceptional, near-flawless · 7-8 = clearly above average · 5-6 = average/unremarkable · " +
+    "3-4 = noticeable problems or mild deformity · 0-2 = severe deformity, injury, or poor condition.\n" +
+    "Well-kept, attractive feet and deformed or neglected feet MUST receive clearly different scores — " +
+    "if you would not rate them the same in real life, do not rate them the same here. " +
+    "Be honest and precise even when the result is unflattering; accuracy matters more than politeness, " +
+    "but never mock or demean the person. 'overall' is holistic and should drop noticeably when there is a serious flaw.\n\n" +
+    "If the image does not clearly show the bare feet of an adult human, set is_feet=false, all numeric scores to 0, " +
+    "observations to [], and explain gently in 'verdict'.";
 
   const body = {
     model: "claude-opus-4-8",
-    max_tokens: 1024,
-    output_config: { format: { type: "json_schema", schema } },
+    max_tokens: 3000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "high", format: { type: "json_schema", schema } },
     messages: [{
       role: "user",
       content: [
@@ -418,6 +517,7 @@ async function analyzeWithClaude(file, dataUrl) {
     health: clampScore(out.health),
     overall: clampScore(out.overall),
     verdict: out.verdict || pickVerdict(clampScore(out.overall), {}, 1),
+    observations: Array.isArray(out.observations) ? out.observations.slice(0, 4) : [],
   };
   return scores;
 }
@@ -433,6 +533,15 @@ function revealResult(s) {
   els.engineBadge.textContent = s.engine;
   els.verdict.textContent = s.verdict;
   els.gradeLine.textContent = gradeFor(s.overall);
+
+  // observations (Claude AI: the evidence behind the score)
+  if (Array.isArray(s.observations) && s.observations.length) {
+    els.observations.hidden = false;
+    els.observations.innerHTML = s.observations.map((o) => `<li>${escapeHtml(o)}</li>`).join("");
+  } else {
+    els.observations.hidden = true;
+    els.observations.innerHTML = "";
+  }
 
   // confidence (on-device only)
   if (s.engine === "On-device" && s.confidence !== undefined && s.confidence < 0.7) {
@@ -494,6 +603,7 @@ function pushHistory(s) {
     verdict: s.verdict,
     proportions: s.proportions, shape: s.shape, skinQuality: s.skinQuality,
     skinColor: s.skinColor, health: s.health,
+    observations: s.observations || [],
   });
   saveJSON(LS.history, hist.slice(0, 24));
   renderHistory();
@@ -521,6 +631,7 @@ function renderHistory() {
       const view = {
         image: h.image, engine: h.engine, overall: h.overall, confidence: 1,
         verdict: h.verdict || pickVerdict(h.overall, {}, 1),
+        observations: h.observations || [],
         proportions: h.proportions ?? h.overall,
         shape: h.shape ?? h.overall,
         skinQuality: h.skinQuality ?? h.overall,
@@ -687,6 +798,10 @@ function reset() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const clampScore = (v) => Math.round(clamp(Number(v) || 0, 0, 10) * 10) / 10;
 function mapRange(v, inA, inB, outA, outB) {
