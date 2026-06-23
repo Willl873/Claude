@@ -255,6 +255,8 @@ function analyzeLocally(img) {
 
   const skin = new Uint8Array(w * h);
   const lum = new Float32Array(w * h);
+  const cr = new Float32Array(w * h);
+  const cb = new Float32Array(w * h);
   let skinCount = 0;
   let minX = w, minY = h, maxX = 0, maxY = 0;
   let sumCr = 0, sumCb = 0, sumCr2 = 0, sumCb2 = 0;
@@ -272,7 +274,9 @@ function analyzeLocally(img) {
         Cb >= 77 && Cb <= 130 && Cr >= 133 && Cr <= 175 &&
         r > 50 && g > 30 && b > 15 && r >= g - 8 && g >= b - 8;
       if (isSkin) {
-        skin[y * w + x] = 1;
+        const idx = y * w + x;
+        skin[idx] = 1;
+        cr[idx] = Cr; cb[idx] = Cb;
         skinCount++;
         if (x < minX) minX = x; if (x > maxX) maxX = x;
         if (y < minY) minY = y; if (y > maxY) maxY = y;
@@ -288,16 +292,18 @@ function analyzeLocally(img) {
                      clamp(mapRange(skinFrac, 0.85, 0.55, 0, 1), 0, 1);
 
   // --- texture / smoothness over skin: mean neighbour luminance gradient ---
-  let gradSum = 0, gradN = 0;
+  let gradSum = 0, gradN = 0, edgeCount = 0;
+  const EDGE_T = 16; // luminance jump that reads as a wrinkle / vein / hair / blemish edge
   for (let y = 0; y < h - 1; y++) {
     for (let x = 0; x < w - 1; x++) {
       const idx = y * w + x;
       if (!skin[idx]) continue;
-      if (skin[idx + 1]) { gradSum += Math.abs(lum[idx] - lum[idx + 1]); gradN++; }
-      if (skin[idx + w]) { gradSum += Math.abs(lum[idx] - lum[idx + w]); gradN++; }
+      if (skin[idx + 1]) { const d = Math.abs(lum[idx] - lum[idx + 1]); gradSum += d; gradN++; if (d > EDGE_T) edgeCount++; }
+      if (skin[idx + w]) { const d = Math.abs(lum[idx] - lum[idx + w]); gradSum += d; gradN++; if (d > EDGE_T) edgeCount++; }
     }
   }
-  const texture = gradN ? gradSum / gradN : 12; // ~0 (glassy) .. ~25 (rough)
+  const texture = gradN ? gradSum / gradN : 12;      // ~0 (glassy) .. ~25 (rough)
+  const edgeFrac = gradN ? edgeCount / gradN : 0;    // share of skin that is hard edges
 
   // --- tone evenness: chroma std-dev over skin ---
   const meanCr = skinCount ? sumCr / skinCount : 150;
@@ -308,6 +314,25 @@ function analyzeLocally(img) {
 
   const meanL = skinCount ? sumL / skinCount : 128;
   const stdL = skinCount ? Math.sqrt(Math.max(0, sumL2 / skinCount - meanL * meanL)) : 40;
+
+  // --- blemish / discoloration & redness: deviation from the foot's own tone.
+  //     Spots, bruising, fungal/discoloured nails and dark patches read as a
+  //     large chroma distance from the mean or as abnormally dark pixels;
+  //     inflammation reads as strong red (high Cr). ---
+  const chromaT = clamp(2.0 * Math.max(stdCr, stdCb), 11, 22);
+  let blemCount = 0, redCount = 0;
+  for (let y = minY; y <= maxY && skinCount; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const idx = y * w + x;
+      if (!skin[idx]) continue;
+      const dCr = cr[idx] - meanCr, dCb = cb[idx] - meanCb;
+      const chromaDist = Math.sqrt(dCr * dCr + dCb * dCb);
+      if (chromaDist > chromaT || lum[idx] < meanL - 1.8 * stdL) blemCount++;
+      if (cr[idx] > 162 && cr[idx] > meanCr + 9) redCount++;
+    }
+  }
+  const blemishFrac = skinCount ? blemCount / skinCount : 0; // patchiness / spots / bruising
+  const redFrac = skinCount ? redCount / skinCount : 0;      // inflammation / irritation
 
   // --- proportions: bounding box elongation + fill ---
   const bw = Math.max(1, maxX - minX);
@@ -323,41 +348,41 @@ function analyzeLocally(img) {
   //     acts as a deformity proxy. ~0.006 (smooth) .. ~0.06 (very irregular) ---
   const roughness = contourRoughness(skin, w, h, minX, maxX, minY, maxY);
 
-  /* ---- map raw metrics to 0..10 (wide, discriminating band) ---- */
-  const smoothContour = mapRange(roughness, 0.006, 0.055, 9.6, 2.0); // smooth edge -> high
-
-  // proportions: elongation in an aesthetic range, solid fill, clean outline
+  /* ---- positive sub-skills (0..10): each collapses toward 0 as its flaw worsens ---- */
+  const smoothOutline = mapRange(roughness, 0.05, 0.008, 0, 10);  // clean silhouette
+  const smooth    = mapRange(texture, 17, 3, 0, 10);              // smooth skin surface
+  const cleanEdge = mapRange(edgeFrac, 0.42, 0.08, 0, 10);        // few wrinkles / veins / hair
+  const cleanSkin = mapRange(blemishFrac, 0.22, 0.02, 0, 10);     // few spots / discoloration
+  const evenTone  = mapRange(toneSpread, 14, 3, 0, 10);           // uniform colour
+  const notRed    = mapRange(redFrac, 0.30, 0.03, 0, 10);         // not inflamed
+  const symGood   = mapRange(sym, 0.5, 0.92, 0, 10);              // left/right symmetry
   const elongScore = elong <= 2.4
-    ? mapRange(elong, 1.0, 2.4, 3.8, 9.6)
-    : mapRange(elong, 2.4, 4.6, 9.6, 3.2);
-  const fillScore = mapRange(fill, 0.28, 0.64, 3.4, 9.4);
-  const proportions = clampScore(0.55 * elongScore + 0.25 * fillScore + 0.20 * smoothContour);
+    ? mapRange(elong, 1.0, 2.4, 2.0, 9.6)
+    : mapRange(elong, 2.4, 4.6, 9.6, 2.5);
+  const fillScore = mapRange(fill, 0.26, 0.64, 2.5, 9.4);
 
-  // shape: symmetry + a smooth, deformity-free outline
-  const symScore = mapRange(sym, 0.42, 0.92, 2.8, 9.8);
-  const shape = clampScore(0.45 * symScore + 0.40 * smoothContour + 0.15 * fillScore);
+  const proportions = clampScore(0.55 * elongScore + 0.25 * fillScore + 0.20 * smoothOutline);
+  const shape       = clampScore(0.45 * symGood + 0.35 * smoothOutline + 0.20 * fillScore);
+  const skinQuality = clampScore(0.42 * smooth + 0.30 * cleanSkin + 0.28 * cleanEdge);
+  const skinColor   = clampScore(0.55 * evenTone + 0.30 * notRed + 0.15 * cleanSkin);
+  const health      = clampScore(0.28 * cleanSkin + 0.22 * notRed + 0.20 * smooth + 0.16 * evenTone + 0.14 * smoothOutline);
 
-  // skin quality: smoother => higher
-  const skinQuality = clampScore(mapRange(texture, 18, 3.0, 2.4, 9.8));
-
-  // skin tone: more even => higher; penalty for harsh exposure spread
-  const tone = mapRange(toneSpread, 15, 3.0, 2.8, 9.7);
-  const exposurePenalty = mapRange(stdL, 84, 36, -1.8, 0);
-  const skinColor = clampScore(tone + exposurePenalty);
-
-  // health: skin + tone + healthy warmth + contour integrity + good light
-  const warmth = mapRange(Math.abs(meanCr - 150), 30, 4, 4.2, 9.4);
-  const brightness = (meanL >= 85 && meanL <= 205)
-    ? mapRange(Math.abs(meanL - 150), 65, 0, 6.0, 9.6)
-    : mapRange(Math.min(Math.abs(meanL - 85), Math.abs(meanL - 205)), 0, 55, 6.0, 3.2);
-  const health = clampScore(
-    0.30 * skinQuality + 0.22 * skinColor + 0.18 * warmth + 0.16 * smoothContour + 0.14 * brightness
-  );
+  /* ---- overall, with compounding penalties so multiple visible problems crater it ---- */
+  let overall = 0.15 * proportions + 0.15 * shape + 0.27 * skinQuality + 0.18 * skinColor + 0.25 * health;
+  const flaws = [
+    mapRange(texture, 9, 17, 0, 1),         // rough skin
+    mapRange(toneSpread, 7, 13, 0, 1),      // blotchy colour
+    mapRange(blemishFrac, 0.08, 0.24, 0, 1),// spots / discoloration
+    mapRange(edgeFrac, 0.18, 0.42, 0, 1),   // wrinkles / veins / hair
+    mapRange(redFrac, 0.10, 0.32, 0, 1),    // inflammation
+    mapRange(roughness, 0.018, 0.05, 0, 1), // irregular / deformed outline
+  ].map((v) => clamp(v, 0, 1));
+  const flawLoad = flaws.reduce((a, b) => a + b, 0);          // 0 (flawless) .. 6 (severe)
+  const severe = flaws.filter((v) => v > 0.6).length;          // number of serious problems
+  overall -= 0.9 * Math.max(0, flawLoad - 1) + 0.8 * severe;   // forgive one minor flaw, then bite
 
   const scores = { proportions, shape, skinQuality, skinColor, health };
-  scores.overall = clampScore(
-    0.18 * proportions + 0.22 * shape + 0.24 * skinQuality + 0.14 * skinColor + 0.22 * health
-  );
+  scores.overall = clampScore(overall);
   scores.confidence = confidence;
   scores.verdict = pickVerdict(scores.overall, scores, confidence);
   return scores;
@@ -543,12 +568,15 @@ function revealResult(s) {
     els.observations.innerHTML = "";
   }
 
-  // confidence (on-device only)
-  if (s.engine === "On-device" && s.confidence !== undefined && s.confidence < 0.7) {
+  // confidence / honest caveat (on-device only)
+  if (s.engine === "On-device") {
     els.confidenceLine.hidden = false;
-    els.confidenceLine.textContent = s.confidence < 0.35
-      ? "Hmm — not sure that's a foot. Scored anyway, but take it with a wink."
-      : "Lighting or framing made this a little tricky — confidence is moderate.";
+    if (s.confidence !== undefined && s.confidence < 0.35)
+      els.confidenceLine.textContent = "Hmm — not sure that's a foot. Scored anyway, but take it with a wink.";
+    else if (s.confidence !== undefined && s.confidence < 0.7)
+      els.confidenceLine.textContent = "Lighting or framing made this a little tricky — confidence is moderate.";
+    else
+      els.confidenceLine.textContent = "On-device estimate from image analysis. For a truly precise rating, switch to Claude AI mode.";
   } else {
     els.confidenceLine.hidden = true;
   }
