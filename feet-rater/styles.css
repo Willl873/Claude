@@ -427,6 +427,9 @@ body {
 }
 
 /* ===== Modal ===== */
+/* The hidden attribute must win over the display rule below, or the modal
+   never closes (author display:grid overrides the UA [hidden] display:none). */
+.modal[hidden] { display: none; }
 .modal {
   position: fixed;
   inset: 0;
