@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clarely — Dermatologist-Guided Skincare, Delivered</title>
+  <meta name="description" content="Clarely is skincare telehealth made simple. Take a quick visit, get matched with a licensed provider, and receive a personalized prescription treatment plan delivered to your door. Clear skin, expert care, ongoing support." />
+  <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#059669" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='44' fill='%23059669'/><path d='M30 52l14 14 28-30' fill='none' stroke='white' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+</head>
+<body>
+  <!-- ===== Announcement bar ===== -->
+  <div class="announce">
+    <span class="announce__dot" aria-hidden="true"></span>
+    Free, no-commitment skin assessment · Plans from <strong>$48/mo</strong>
+  </div>
+
+  <!-- ===== Navbar ===== -->
+  <header class="nav" id="nav">
+    <div class="nav__inner container">
+      <a class="brand" href="#top" aria-label="Clarely home">
+        <span class="brand__mark" aria-hidden="true">
+          <svg viewBox="0 0 100 100" width="34" height="34"><circle cx="50" cy="50" r="44" fill="currentColor"/><path d="M30 52l14 14 28-30" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="brand__name">Clarely</span>
+      </a>
+
+      <nav class="nav__links" id="navLinks" aria-label="Primary">
+        <a href="#how">How it works</a>
+        <a href="#treats">What we treat</a>
+        <a href="#results">Results</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+
+      <div class="nav__cta">
+        <a href="#" class="btn btn--ghost btn--sm">Log in</a>
+        <a href="#start" class="btn btn--primary btn--sm js-start">Start free visit</a>
+      </div>
+
+      <button class="nav__burger" id="burger" aria-label="Open menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- ===== Hero ===== -->
+    <section class="hero">
+      <div class="hero__glow" aria-hidden="true"></div>
+      <div class="container hero__inner">
+        <div class="hero__copy reveal">
+          <span class="eyebrow">Skincare telehealth · 50 states</span>
+          <h1 class="hero__title">Clear skin starts with<br><span class="grad">expert care.</span></h1>
+          <p class="hero__sub">
+            Skip the waiting room. Take a quick online visit, get matched with a licensed
+            dermatology provider, and receive a personalized prescription plan — delivered
+            to your door with unlimited follow-ups.
+          </p>
+          <div class="hero__actions">
+            <a href="#start" class="btn btn--primary btn--lg js-start">Start your free visit</a>
+            <a href="#how" class="btn btn--ghost btn--lg">See how it works</a>
+          </div>
+          <ul class="hero__trust">
+            <li><span class="tick" aria-hidden="true">✓</span> No insurance needed</li>
+            <li><span class="tick" aria-hidden="true">✓</span> Cancel anytime</li>
+            <li><span class="tick" aria-hidden="true">✓</span> Real licensed providers</li>
+          </ul>
+        </div>
+
+        <div class="hero__visual reveal">
+          <div class="phone">
+            <div class="phone__notch" aria-hidden="true"></div>
+            <div class="phone__screen">
+              <div class="pcard pcard--head">
+                <div class="avatar" aria-hidden="true">DR</div>
+                <div>
+                  <strong>Dr. Reyes, NP-C</strong>
+                  <span>Your dermatology provider</span>
+                </div>
+              </div>
+              <div class="pcard">
+                <span class="pcard__label">Your plan</span>
+                <p class="pcard__title">Custom Acne Routine</p>
+                <div class="pill-row">
+                  <span class="pill">Tretinoin 0.025%</span>
+                  <span class="pill">Clindamycin</span>
+                  <span class="pill">Azelaic acid</span>
+                </div>
+              </div>
+              <div class="pcard pcard--progress">
+                <span class="pcard__label">12-week progress</span>
+                <div class="bar"><i style="--w:82%"></i></div>
+                <span class="pcard__meta">82% clearer · on track</span>
+              </div>
+              <button class="pcard__btn">Message my provider</button>
+            </div>
+          </div>
+          <div class="float-badge float-badge--a">
+            <strong>4.9★</strong><span>12,000+ reviews</span>
+          </div>
+          <div class="float-badge float-badge--b">
+            <strong>$48/mo</strong><span>meds included</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Logo / trust strip ===== -->
+    <section class="strip">
+      <div class="container strip__inner">
+        <p class="strip__label">Trusted by people building healthier skin</p>
+        <div class="strip__stats">
+          <div><strong>250k+</strong><span>visits completed</span></div>
+          <div class="sep" aria-hidden="true"></div>
+          <div><strong>93%</strong><span>see results by week 12</span></div>
+          <div class="sep" aria-hidden="true"></div>
+          <div><strong>&lt;24h</strong><span>provider response</span></div>
+          <div class="sep" aria-hidden="true"></div>
+          <div><strong>50</strong><span>states covered</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== How it works ===== -->
+    <section class="section" id="how">
+      <div class="container">
+        <div class="section__head reveal">
+          <span class="eyebrow eyebrow--center">How it works</span>
+          <h2 class="section__title">Expert skincare in three simple steps</h2>
+          <p class="section__lead">No appointments, no pharmacy lines. Everything happens online, on your schedule.</p>
+        </div>
+
+        <div class="steps">
+          <article class="step reveal">
+            <span class="step__num">01</span>
+            <div class="step__icon" aria-hidden="true">📝</div>
+            <h3>Share your skin story</h3>
+            <p>Answer a few questions and upload photos in our 5-minute online visit. No video calls required.</p>
+          </article>
+          <article class="step reveal">
+            <span class="step__num">02</span>
+            <div class="step__icon" aria-hidden="true">🩺</div>
+            <h3>Get matched with a provider</h3>
+            <p>A licensed dermatology provider reviews your case and builds a treatment plan made just for you.</p>
+          </article>
+          <article class="step reveal">
+            <span class="step__num">03</span>
+            <div class="step__icon" aria-hidden="true">📦</div>
+            <h3>Treatment at your door</h3>
+            <p>Prescription medications ship free to your home. Message your provider anytime as your skin changes.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== What we treat ===== -->
+    <section class="section section--tint" id="treats">
+      <div class="container">
+        <div class="section__head reveal">
+          <span class="eyebrow eyebrow--center">What we treat</span>
+          <h2 class="section__title">One plan, tailored to your skin</h2>
+          <p class="section__lead">Our providers create prescription-strength routines for the concerns that matter most to you.</p>
+        </div>
+
+        <div class="cards">
+          <article class="tcard reveal"><span class="tcard__emoji" aria-hidden="true">✨</span><h3>Acne &amp; breakouts</h3><p>Hormonal, cystic, or stubborn — calm active breakouts and prevent new ones.</p></article>
+          <article class="tcard reveal"><span class="tcard__emoji" aria-hidden="true">🌷</span><h3>Rosacea &amp; redness</h3><p>Soothe flushing, visible vessels, and sensitivity with gentle prescriptions.</p></article>
+          <article class="tcard reveal"><span class="tcard__emoji" aria-hidden="true">⏳</span><h3>Anti-aging</h3><p>Smooth fine lines and boost collagen with clinical-grade retinoids.</p></article>
+          <article class="tcard reveal"><span class="tcard__emoji" aria-hidden="true">🟤</span><h3>Dark spots &amp; melasma</h3><p>Fade hyperpigmentation and even your tone with targeted brighteners.</p></article>
+          <article class="tcard reveal"><span class="tcard__emoji" aria-hidden="true">💧</span><h3>Eczema &amp; dryness</h3><p>Repair the skin barrier and relieve itch, flaking, and irritation.</p></article>
+          <article class="tcard reveal"><span class="tcard__emoji" aria-hidden="true">🔬</span><h3>Anything else</h3><p>Not sure? Tell us your concern and a provider will guide you from there.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Why Clarely / what's included ===== -->
+    <section class="section" id="why">
+      <div class="container why">
+        <div class="why__media reveal" aria-hidden="true">
+          <div class="why__panel">
+            <div class="why__chip">Included with every plan</div>
+            <ul class="why__list">
+              <li><span class="tick" aria-hidden="true">✓</span> Personalized prescription formula</li>
+              <li><span class="tick" aria-hidden="true">✓</span> Free shipping, every refill</li>
+              <li><span class="tick" aria-hidden="true">✓</span> Unlimited provider messaging</li>
+              <li><span class="tick" aria-hidden="true">✓</span> Ongoing plan adjustments</li>
+              <li><span class="tick" aria-hidden="true">✓</span> Progress check-ins &amp; photo tracking</li>
+            </ul>
+          </div>
+        </div>
+        <div class="why__copy reveal">
+          <span class="eyebrow">Why Clarely</span>
+          <h2 class="section__title section__title--left">Care that keeps working, long after your first plan</h2>
+          <p class="section__lead section__lead--left">
+            Skin changes — and your treatment should too. Clarely isn’t a one-time
+            prescription. Your provider stays with you, fine-tuning your routine and
+            answering questions as your skin clears.
+          </p>
+          <div class="why__feats">
+            <div class="feat"><div class="feat__ic" aria-hidden="true">💬</div><div><strong>Always reachable</strong><p>Message your provider and hear back, usually within a day.</p></div></div>
+            <div class="feat"><div class="feat__ic" aria-hidden="true">🧪</div><div><strong>Prescription-grade</strong><p>Ingredients you can’t get over the counter, mixed for your skin.</p></div></div>
+            <div class="feat"><div class="feat__ic" aria-hidden="true">🔒</div><div><strong>Private &amp; secure</strong><p>HIPAA-compliant care that keeps your information protected.</p></div></div>
+          </div>
+          <a href="#start" class="btn btn--primary btn--lg js-start">Build my plan</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Results / testimonials ===== -->
+    <section class="section section--tint" id="results">
+      <div class="container">
+        <div class="section__head reveal">
+          <span class="eyebrow eyebrow--center">Real results</span>
+          <h2 class="section__title">Skin that speaks for itself</h2>
+          <p class="section__lead">Members typically notice a difference within 6–12 weeks of starting their plan.</p>
+        </div>
+
+        <div class="quotes">
+          <figure class="quote reveal">
+            <div class="stars" aria-label="5 out of 5 stars">★★★★★</div>
+            <blockquote>“After years of trying everything, my provider got it right in one plan. My cystic acne is finally gone.”</blockquote>
+            <figcaption><span class="quote__avatar" aria-hidden="true">M</span> Maya R. · <em>Member, 7 months</em></figcaption>
+          </figure>
+          <figure class="quote reveal">
+            <div class="stars" aria-label="5 out of 5 stars">★★★★★</div>
+            <blockquote>“So much easier than a derm office. I message my provider from my couch and my refills just show up.”</blockquote>
+            <figcaption><span class="quote__avatar" aria-hidden="true">J</span> Jordan T. · <em>Member, 1 year</em></figcaption>
+          </figure>
+          <figure class="quote reveal">
+            <div class="stars" aria-label="5 out of 5 stars">★★★★★</div>
+            <blockquote>“The progress tracking kept me going. Seeing my skin clear week by week was so motivating.”</blockquote>
+            <figcaption><span class="quote__avatar" aria-hidden="true">A</span> Aisha K. · <em>Member, 5 months</em></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Pricing ===== -->
+    <section class="section" id="pricing">
+      <div class="container">
+        <div class="section__head reveal">
+          <span class="eyebrow eyebrow--center">Simple pricing</span>
+          <h2 class="section__title">One membership. Everything included.</h2>
+          <p class="section__lead">No insurance, no surprise fees. Pause or cancel anytime.</p>
+        </div>
+
+        <div class="plans">
+          <article class="plan reveal">
+            <h3 class="plan__name">Monthly</h3>
+            <p class="plan__price"><span>$</span>58<small>/mo</small></p>
+            <p class="plan__desc">Flexible month-to-month care.</p>
+            <ul class="plan__list">
+              <li>Provider visit &amp; custom plan</li>
+              <li>Prescription meds included</li>
+              <li>Free shipping &amp; refills</li>
+              <li>Unlimited messaging</li>
+            </ul>
+            <a href="#start" class="btn btn--ghost btn--block js-start">Choose monthly</a>
+          </article>
+
+          <article class="plan plan--featured reveal">
+            <span class="plan__badge">Most popular</span>
+            <h3 class="plan__name">Quarterly</h3>
+            <p class="plan__price"><span>$</span>48<small>/mo</small></p>
+            <p class="plan__desc">Billed every 3 months — save 17%.</p>
+            <ul class="plan__list">
+              <li>Everything in Monthly</li>
+              <li>Priority provider response</li>
+              <li>Quarterly progress review</li>
+              <li>Seasonal plan tune-ups</li>
+            </ul>
+            <a href="#start" class="btn btn--primary btn--block js-start">Choose quarterly</a>
+          </article>
+
+          <article class="plan reveal">
+            <h3 class="plan__name">Assessment</h3>
+            <p class="plan__price"><span>$</span>0</p>
+            <p class="plan__desc">See if Clarely is right for you.</p>
+            <ul class="plan__list">
+              <li>Free online skin assessment</li>
+              <li>Personalized recommendations</li>
+              <li>No commitment</li>
+              <li>Upgrade anytime</li>
+            </ul>
+            <a href="#start" class="btn btn--ghost btn--block js-start">Start free</a>
+          </article>
+        </div>
+        <p class="plans__note">Membership covers your visit and provider care. Medication cost is included in your plan price.</p>
+      </div>
+    </section>
+
+    <!-- ===== CTA banner ===== -->
+    <section class="cta" id="start">
+      <div class="container cta__inner reveal">
+        <h2 class="cta__title">Your clearest skin is a few questions away</h2>
+        <p class="cta__sub">Take the free assessment today. No insurance, no waiting room — just expert care, made for you.</p>
+        <form class="cta__form" id="startForm" novalidate>
+          <input type="email" id="startEmail" class="cta__input" placeholder="Enter your email" aria-label="Email address" required />
+          <button type="submit" class="btn btn--primary btn--lg">Start free visit</button>
+        </form>
+        <p class="cta__fine" id="startMsg">Takes about 5 minutes · You’ll only pay if you choose a plan.</p>
+      </div>
+    </section>
+
+    <!-- ===== FAQ ===== -->
+    <section class="section" id="faq">
+      <div class="container faq">
+        <div class="section__head reveal">
+          <span class="eyebrow eyebrow--center">Questions</span>
+          <h2 class="section__title">Frequently asked</h2>
+        </div>
+
+        <div class="accordion" id="accordion">
+          <div class="acc">
+            <button class="acc__q" aria-expanded="false">Is Clarely a real medical service?<span class="acc__ic" aria-hidden="true">+</span></button>
+            <div class="acc__a"><p>Yes. Every plan is created and overseen by a licensed dermatology provider in your state. Clarely is telehealth — real clinical care, delivered online.</p></div>
+          </div>
+          <div class="acc">
+            <button class="acc__q" aria-expanded="false">Do I need insurance?<span class="acc__ic" aria-hidden="true">+</span></button>
+            <div class="acc__a"><p>No. Clarely is a flat-rate membership that covers your visit, provider care, and prescription medication. There are no insurance claims or hidden fees.</p></div>
+          </div>
+          <div class="acc">
+            <button class="acc__q" aria-expanded="false">How long until I see results?<span class="acc__ic" aria-hidden="true">+</span></button>
+            <div class="acc__a"><p>Most members notice improvement within 6–12 weeks. Skin can adjust slowly at first, which is why your provider stays with you to fine-tune your plan along the way.</p></div>
+          </div>
+          <div class="acc">
+            <button class="acc__q" aria-expanded="false">Can I message my provider after I start?<span class="acc__ic" aria-hidden="true">+</span></button>
+            <div class="acc__a"><p>Always. Unlimited messaging is included with every plan, and providers typically respond within 24 hours.</p></div>
+          </div>
+          <div class="acc">
+            <button class="acc__q" aria-expanded="false">What if the treatment isn’t working?<span class="acc__ic" aria-hidden="true">+</span></button>
+            <div class="acc__a"><p>Just tell your provider. They’ll adjust your formula, swap ingredients, or change your routine as needed — at no extra cost.</p></div>
+          </div>
+          <div class="acc">
+            <button class="acc__q" aria-expanded="false">Can I cancel anytime?<span class="acc__ic" aria-hidden="true">+</span></button>
+            <div class="acc__a"><p>Yes. You can pause or cancel your membership at any time, no questions asked.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Footer ===== -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <a class="brand brand--light" href="#top">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 100 100" width="30" height="30"><circle cx="50" cy="50" r="44" fill="currentColor"/><path d="M30 52l14 14 28-30" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="brand__name">Clarely</span>
+        </a>
+        <p class="footer__tag">Dermatologist-guided skincare, delivered to your door.</p>
+      </div>
+
+      <nav class="footer__col" aria-label="Company">
+        <h4>Company</h4>
+        <a href="#how">How it works</a>
+        <a href="#why">Why Clarely</a>
+        <a href="#results">Results</a>
+        <a href="#pricing">Pricing</a>
+      </nav>
+      <nav class="footer__col" aria-label="Treatments">
+        <h4>Treatments</h4>
+        <a href="#treats">Acne</a>
+        <a href="#treats">Rosacea</a>
+        <a href="#treats">Anti-aging</a>
+        <a href="#treats">Dark spots</a>
+      </nav>
+      <nav class="footer__col" aria-label="Support">
+        <h4>Support</h4>
+        <a href="#faq">FAQ</a>
+        <a href="#start">Start a visit</a>
+        <a href="#">Contact</a>
+        <a href="#">Help center</a>
+      </nav>
+    </div>
+
+    <div class="container footer__bottom">
+      <p>© <span id="year"></span> Clarely Health, Inc. All rights reserved.</p>
+      <div class="footer__legal">
+        <a href="#">Privacy</a><a href="#">Terms</a><a href="#">HIPAA</a>
+      </div>
+    </div>
+    <div class="container footer__disclaimer">
+      <p>Clarely is a telehealth platform. It does not replace emergency care. If you are experiencing a medical emergency, call 911. This site is a design demo and does not provide real medical services.</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
