@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RateMySoles — upload your feet, get rated 1 to 10</title>
+  <meta name="description" content="Upload a photo of your feet and let the community rate them from 1 to 10. 18+ only." />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦶</text></svg>" />
+</head>
+<body>
+  <!-- Age gate -->
+  <div id="age-gate" class="overlay" hidden>
+    <div class="card age-card">
+      <div class="logo-big">🦶 RateMySoles</div>
+      <h2>Are you 18 or older?</h2>
+      <p>This site contains user-submitted photos of feet and is intended for adults.
+         By entering you confirm you are at least 18 years old and agree to the
+         <a href="#" data-open="rules">community rules</a>.</p>
+      <div class="row gap">
+        <button class="btn primary" id="age-yes">I'm 18 or older — Enter</button>
+        <a class="btn ghost" href="https://www.google.com">Leave</a>
+      </div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="/">🦶 <span>RateMySoles</span></a>
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-sort="new">Newest</button>
+        <button class="tab" data-sort="top">Top rated</button>
+      </nav>
+      <button class="btn primary" id="open-upload">Upload your soles</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p id="empty" class="empty" hidden>No soles yet — be the first to upload!</p>
+    <div id="gallery" class="gallery"></div>
+    <div class="center">
+      <button class="btn ghost" id="load-more" hidden>Load more</button>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap">
+      <span>RateMySoles · for entertainment only · 18+</span>
+      <span class="dot">·</span>
+      <a href="#" data-open="rules">Community rules</a>
+    </div>
+  </footer>
+
+  <!-- Upload modal -->
+  <div id="upload-modal" class="overlay" hidden>
+    <div class="card">
+      <div class="card-head">
+        <h2>Upload your soles</h2>
+        <button class="x" data-close>✕</button>
+      </div>
+      <form id="upload-form">
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden />
+          <div id="drop-inner">
+            <div class="drop-icon">📷</div>
+            <div>Tap to choose a photo, or drag one here</div>
+            <small>JPEG / PNG / WebP / GIF · up to 8 MB</small>
+          </div>
+          <img id="preview" alt="preview" hidden />
+        </label>
+
+        <input type="text" id="title" maxlength="80" placeholder="Optional caption (max 80 chars)" />
+
+        <label class="check">
+          <input type="checkbox" id="consent" />
+          <span>I'm 18+, these are my own feet (or I have permission to post them),
+            and the photo contains <strong>no nudity, sexual content, or minors</strong>.</span>
+        </label>
+
+        <div class="form-msg" id="upload-msg" hidden></div>
+
+        <div class="row gap">
+          <button type="submit" class="btn primary" id="upload-btn" disabled>Post for rating</button>
+          <button type="button" class="btn ghost" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Photo detail modal -->
+  <div id="photo-modal" class="overlay" hidden>
+    <div class="card photo-card">
+      <button class="x floating" data-close>✕</button>
+      <div class="photo-stage"><img id="big-img" alt="" /></div>
+      <div class="photo-side">
+        <h3 id="big-title"></h3>
+        <div class="score-block">
+          <div class="big-score"><span id="big-avg">–</span><small>/10</small></div>
+          <div class="muted" id="big-count"></div>
+        </div>
+
+        <div class="rate-label">Your rating</div>
+        <div class="rater" id="rater"></div>
+        <div class="muted small" id="your-vote"></div>
+
+        <button class="link danger" id="report-btn">Report this photo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rules modal -->
+  <div id="rules-modal" class="overlay" hidden>
+    <div class="card">
+      <div class="card-head">
+        <h2>Community rules</h2>
+        <button class="x" data-close>✕</button>
+      </div>
+      <ul class="rules">
+        <li><strong>18+ only.</strong> You must be an adult to use this site.</li>
+        <li><strong>Feet only.</strong> No nudity, no sexually explicit content.</li>
+        <li><strong>No minors.</strong> Never upload photos of anyone under 18.</li>
+        <li><strong>Consent.</strong> Only upload photos you own or have permission to share.</li>
+        <li><strong>No personal info.</strong> Don't include faces, names, or identifying details.</li>
+        <li><strong>Be respectful.</strong> Ratings are for fun. Reported content is reviewed and removed.</li>
+      </ul>
+      <p class="muted small">Photos are re-encoded on upload, which strips embedded location (GPS) data.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
