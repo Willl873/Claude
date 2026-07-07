@@ -24,6 +24,8 @@ grpGen  = "General"
 minScore     = input.int(7, "Min checks to pass for a GO verdict", minval = 1, maxval = 12, group = grpGen)
 tablePos     = input.string("Top Right", "Checklist position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group = grpGen)
 tableSize    = input.string("Small", "Checklist text size", options = ["Tiny", "Small", "Normal"], group = grpGen)
+showLegend   = input.bool(true, "Show legend", group = grpGen)
+legendPos    = input.string("Bottom Left", "Legend position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Left"], group = grpGen)
 
 grpTrend = "Trend filter"
 emaFastLen = input.int(50,  "Fast EMA", minval = 1, group = grpTrend)
@@ -256,7 +258,8 @@ if barstate.islast and showFib
     drawFib(upSwing ? swingLow : swingHigh, "100%",  color.new(color.gray, 30))
 
 // ═════════════════════════ CHECKLIST TABLE ═══════════════════════════════════
-posOpt  = tablePos == "Top Right" ? position.top_right : tablePos == "Top Left" ? position.top_left : tablePos == "Bottom Right" ? position.bottom_right : tablePos == "Bottom Left" ? position.bottom_left : position.middle_right
+posFrom(string s) => s == "Top Right" ? position.top_right : s == "Top Left" ? position.top_left : s == "Bottom Right" ? position.bottom_right : s == "Bottom Left" ? position.bottom_left : s == "Middle Left" ? position.middle_left : position.middle_right
+posOpt  = posFrom(tablePos)
 txtSize = tableSize == "Tiny" ? size.tiny : tableSize == "Small" ? size.small : size.normal
 
 var table tbl = table.new(posOpt, 4, 19, bgcolor = color.new(color.black, 25), border_width = 1, border_color = color.new(color.gray, 70))
@@ -319,6 +322,27 @@ if barstate.islast
     // footnote
     table.cell(tbl, 0, 18, "Greeks are price/VIX proxies — not options-chain data", text_color = color.new(color.gray, 20), text_size = size.tiny, text_halign = text.align_left)
     table.merge_cells(tbl, 0, 18, 3, 18)
+
+// ═════════════════════════ LEGEND ════════════════════════════════════════════
+var table lgd = table.new(posFrom(legendPos), 2, 11, bgcolor = color.new(color.black, 25), border_width = 1, border_color = color.new(color.gray, 70))
+
+legendRow(int row, string sym, color symCol, string txt) =>
+    table.cell(lgd, 0, row, sym, text_color = symCol, text_size = txtSize)
+    table.cell(lgd, 1, row, txt, text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+
+if barstate.islast and showLegend
+    table.cell(lgd, 0, 0, "LEGEND", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+    table.merge_cells(lgd, 0, 0, 1, 0)
+    legendRow(1,  "━",   color.new(color.orange, 20), "EMA " + str.tostring(emaFastLen) + " — fast trend")
+    legendRow(2,  "━",   color.new(color.blue, 20),   "EMA " + str.tostring(emaSlowLen) + " — slow trend")
+    legendRow(3,  "━",   color.new(color.teal, 0),    "VWAP · shaded ±" + str.tostring(vwapMult, "#.#") + "σ band")
+    legendRow(4,  "╌╌",  color.new(color.gray, 20),   "Auto Fibonacci levels (0–100%)")
+    legendRow(5,  "▲",   color.new(color.green, 0),   "Bull pattern: Engulfing / Hammer / Morning Star")
+    legendRow(6,  "▼",   color.new(color.red, 0),     "Bear pattern: Engulfing / Shooting Star / Evening Star")
+    legendRow(7,  "◆",   color.new(color.gray, 40),   "Doji — indecision (info only, not scored)")
+    legendRow(8,  "▓",   color.new(color.green, 40),  "Background flash — GO verdict fires (green long / red short)")
+    legendRow(9,  "✔ ✘", cTxt,                        "Checklist: check passes / fails for that side")
+    legendRow(10, "Δ Γ Θ ν", color.new(color.yellow, 30), "Greeks are price/VIX proxies, not options-chain data")
 
 // ═════════════════════════ ALERTS ════════════════════════════════════════════
 alertcondition(longFire,  "GO LONG — checklist passed",  "Pre-Trade Checklist: LONG setup — score threshold reached")

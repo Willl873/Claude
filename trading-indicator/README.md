@@ -69,12 +69,15 @@ use rows 7–10 here as a regime sanity-check, not as a pricing model.
   point of the lookback window (default 100 bars), direction-aware
 - **Candlestick pattern markers** — ▲ bull patterns, ▼ bear patterns, ◆ doji
 - **Background flash** — green/red on the bar a GO verdict first fires
+- **Legend** — a second on-chart table (bottom-left by default, toggleable) explaining
+  every line, marker, and checklist symbol, including the greeks-are-proxies caveat
 
 ## Key settings
 
 | Group | Setting | Default |
 |-------|---------|---------|
 | General | Min checks for a GO verdict | 7 |
+| General | Show legend / legend position | On, bottom-left |
 | Trend | Fast / slow EMA | 50 / 200 |
 | RSI | Length, OB, OS | 14 / 70 / 30 |
 | MACD | Fast / slow / signal | 12 / 26 / 9 |
@@ -84,6 +87,37 @@ use rows 7–10 here as a regime sanity-check, not as a pricing model.
 | Greeks | Delta lookback, min ADX, max VIX %ile | 14 / 20 / 80 |
 | Candlesticks | Pattern validity window | 3 bars |
 | Risk | Stop distance, target | 1.5 × ATR, 2 R |
+
+## Improvement roadmap (ideas)
+
+Roughly in order of expected value:
+
+1. **Divergence detection** — pivot-based RSI/MACD divergence (price makes a new
+   high/low, oscillator doesn't) as a 13th check; far stronger than level checks alone.
+2. **Higher-timeframe confirmation** — require the trend check to also pass on a
+   higher timeframe (e.g. 1h chart confirmed by the daily) via `request.security`.
+3. **Weighted scoring + veto checks** — not all checks are equal; let users weight
+   each check and mark some (e.g. trend, VIX) as *required* regardless of score.
+4. **Pivot-based fib anchors** — anchor the retracement to confirmed
+   `ta.pivothigh`/`ta.pivotlow` swings instead of the raw window high/low, so the fib
+   zone reflects actual structure.
+5. **Strategy port for backtesting** — a `strategy()` twin that enters on GO verdicts,
+   so win rate / expectancy per score threshold can be measured, plus a per-check
+   hit-rate table to prune checks that don't earn their keep.
+6. **Position-sizing row** — inputs for account size and risk %, output shares or
+   contracts from the ATR stop distance.
+7. **Symbol-aware vol index** — auto-select VXN for NDX/QQQ, RVX for RUT/IWM, etc.
+   instead of always VIX.
+8. **Session/time filter** — skip the first N minutes after the open and low-liquidity
+   hours; optionally an economic-calendar blackout input.
+9. **Confirmed-bar mode** — a toggle to evaluate only on closed bars
+   (`barstate.isconfirmed`) for repaint-free signals.
+10. **Webhook-ready alerts** — dynamic `alert()` JSON payloads carrying the full score
+    breakdown for broker/bot automation.
+11. **Multi-symbol screener** — a companion script scanning a watchlist for symbols
+    whose checklist currently scores ≥ threshold.
+12. **Custom VWAP anchoring** — user-selectable anchor (week, month, earnings date,
+    custom timestamp) like TradingView's anchored VWAP tool.
 
 ## Notes & caveats
 
