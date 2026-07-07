@@ -1,11 +1,16 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
-//  CONFLUENCE PRE-TRADE CHECKLIST
-//  RSI · Fibonacci · VIX · Greeks (proxies) · VWAP · MACD · Candlestick patterns
+//  CONFLUENCE PRE-TRADE CHECKLIST  (v2)
+//  RSI · Divergence · Fibonacci · VIX · Greeks (proxies) · VWAP · MACD ·
+//  Candlestick patterns · Higher-timeframe confirmation
 //
-//  A confluence dashboard: every module produces a Long-side and a Short-side
-//  pass/fail, the checklist table scores them, and a verdict (GO LONG /
-//  GO SHORT / STAND ASIDE) is shown together with ATR-based stop & target.
+//  14 checks, each with a Long-side and Short-side pass/fail. Every check has a
+//  user weight (0 disables it); three checks (trend, HTF trend, VIX) can be
+//  marked as VETO checks that block a GO verdict outright. The verdict —
+//  GO LONG / GO SHORT / STAND ASIDE — requires the weighted score % to clear a
+//  threshold, all enabled vetoes to pass, and the winning side to beat the
+//  other. An ATR-based entry/stop/target plan and risk-based position size are
+//  shown in the table.
 //
 //  HONEST LIMITATION — "the greeks": Pine Script cannot read options chains,
 //  so true delta/gamma/theta/vega are impossible to compute here. This script
@@ -13,15 +18,18 @@
 //    Delta  ≈ directional exposure  (ATR-normalised regression slope)
 //    Gamma  ≈ convexity             (acceleration of the delta proxy)
 //    Theta  ≈ time-decay risk       (ADX chop filter — chop bleeds premium)
-//    Vega   ≈ IV richness           (VIX percentile & VIX minus realised vol)
+//    Vega   ≈ IV richness           (vol-index percentile & IV minus realised vol)
 //  Educational tool only — not financial advice.
+//
+//  NOTE: keep the check logic in sync with confluence-pretrade-strategy.pine.
 // ─────────────────────────────────────────────────────────────────────────────
 indicator("Confluence Pre-Trade Checklist", shorttitle = "Pre-Trade Checklist",
      overlay = true, max_lines_count = 100, max_labels_count = 100)
 
 // ═════════════════════════════ INPUTS ════════════════════════════════════════
 grpGen  = "General"
-minScore     = input.int(7, "Min checks to pass for a GO verdict", minval = 1, maxval = 12, group = grpGen)
+minScorePct  = input.float(60.0, "Min weighted score % for a GO verdict", minval = 10, maxval = 100, step = 5, group = grpGen)
+confirmOnly  = input.bool(false, "Signal on confirmed bars only (no repaint)", group = grpGen)
 tablePos     = input.string("Top Right", "Checklist position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group = grpGen)
 tableSize    = input.string("Small", "Checklist text size", options = ["Tiny", "Small", "Normal"], group = grpGen)
 showLegend   = input.bool(true, "Show legend", group = grpGen)
@@ -32,10 +40,19 @@ emaFastLen = input.int(50,  "Fast EMA", minval = 1, group = grpTrend)
 emaSlowLen = input.int(200, "Slow EMA", minval = 1, group = grpTrend)
 showEmas   = input.bool(true, "Plot EMAs", group = grpTrend)
 
+grpHtf = "Higher-timeframe confirmation"
+htfTf = input.timeframe("D", "Confirmation timeframe", group = grpHtf)
+
 grpRsi = "RSI"
 rsiLen = input.int(14, "Length",   minval = 1,  group = grpRsi)
 rsiOb  = input.int(70, "Overbought", minval = 50, group = grpRsi)
 rsiOs  = input.int(30, "Oversold",   maxval = 50, group = grpRsi)
+
+grpDiv = "RSI divergence"
+divLbL   = input.int(5,  "Pivot left bars",  minval = 1, group = grpDiv)
+divLbR   = input.int(2,  "Pivot right bars", minval = 1, group = grpDiv)
+divValid = input.int(14, "Divergence valid for (bars)", minval = 1, group = grpDiv)
+showDivs = input.bool(true, "Plot divergence markers", group = grpDiv)
 
 grpMacd = "MACD"
 macdFast = input.int(12, "Fast length",   minval = 1, group = grpMacd)
@@ -43,58 +60,106 @@ macdSlow = input.int(26, "Slow length",   minval = 1, group = grpMacd)
 macdSig  = input.int(9,  "Signal length", minval = 1, group = grpMacd)
 
 grpVwap = "VWAP"
-showVwap  = input.bool(true, "Plot session VWAP + bands", group = grpVwap)
-vwapMult  = input.float(2.0, "Band st-dev multiplier", minval = 0.1, step = 0.25, group = grpVwap)
+showVwap   = input.bool(true, "Plot VWAP + bands", group = grpVwap)
+vwapMult   = input.float(2.0, "Band st-dev multiplier", minval = 0.1, step = 0.25, group = grpVwap)
+vwapAnchor = input.string("Auto", "Anchor", options = ["Auto", "Session", "Week", "Month", "Year", "Custom date"], group = grpVwap, tooltip = "Auto = session intraday, month on daily charts, year on weekly+")
+vwapAnchorDate = input.time(timestamp("1 Jan 2026 00:00 +0000"), "Custom anchor date", group = grpVwap)
 
 grpFib = "Fibonacci"
-showFib   = input.bool(true, "Plot auto fib levels", group = grpFib)
-fibLen    = input.int(100, "Swing lookback (bars)", minval = 10, group = grpFib)
-fibTolAtr = input.float(0.5, "Level proximity tolerance (× ATR)", minval = 0.1, step = 0.1, group = grpFib)
+showFib     = input.bool(true, "Plot auto fib levels", group = grpFib)
+usePivotFib = input.bool(true, "Anchor to confirmed pivots (recommended)", group = grpFib, tooltip = "Off = raw highest/lowest of the lookback window")
+fibPivLen   = input.int(10, "Pivot strength (bars each side)", minval = 2, group = grpFib)
+fibLen      = input.int(100, "Fallback swing lookback (bars)", minval = 10, group = grpFib)
+fibTolAtr   = input.float(0.5, "Level proximity tolerance (× ATR)", minval = 0.1, step = 0.1, group = grpFib)
 
-grpVix = "VIX regime"
-vixSym     = input.symbol("CBOE:VIX", "Volatility index symbol", group = grpVix)
+grpVix = "Volatility index"
+vixAuto    = input.bool(true, "Auto-select by symbol (VXN for NDX/QQQ, RVX for RUT/IWM)", group = grpVix)
+vixSym     = input.symbol("CBOE:VIX", "Manual symbol", group = grpVix)
 vixCalmMax = input.float(20.0, "Calm regime below", group = grpVix)
 vixFearMin = input.float(30.0, "Fear regime above",  group = grpVix)
 
 grpGreek = "Greeks (proxies)"
-greekLen     = input.int(14, "Delta/Gamma lookback", minval = 2, group = grpGreek)
-adxThresh    = input.float(20.0, "Theta: min ADX (trend strength)", minval = 5, group = grpGreek)
-vegaPctMax   = input.float(80.0, "Vega: max VIX percentile", minval = 0, maxval = 100, group = grpGreek)
+greekLen   = input.int(14, "Delta/Gamma lookback", minval = 2, group = grpGreek)
+adxThresh  = input.float(20.0, "Theta: min ADX (trend strength)", minval = 5, group = grpGreek)
+vegaPctMax = input.float(80.0, "Vega: max vol-index percentile", minval = 0, maxval = 100, group = grpGreek)
 
 grpCdl = "Candlestick patterns"
 showPatterns = input.bool(true, "Plot pattern markers", group = grpCdl)
 cdlLookback  = input.int(3, "Pattern valid for (bars)", minval = 1, maxval = 10, group = grpCdl)
 
-grpRisk = "Risk"
+grpTime = "Session filter (intraday only)"
+useSession   = input.bool(false, "Restrict signals to a session window", group = grpTime)
+sessWindow   = input.session("0930-1600", "Allowed session", group = grpTime)
+skipOpenMins = input.int(15, "Skip first minutes after open", minval = 0, group = grpTime)
+
+grpW = "Check weights (0 disables a check)"
+wTrend = input.float(1.0, "Trend",          minval = 0, maxval = 3, step = 0.5, group = grpW)
+wHtf   = input.float(1.0, "HTF trend",      minval = 0, maxval = 3, step = 0.5, group = grpW)
+wRsi   = input.float(1.0, "RSI",            minval = 0, maxval = 3, step = 0.5, group = grpW)
+wDiv   = input.float(1.0, "RSI divergence", minval = 0, maxval = 3, step = 0.5, group = grpW)
+wMacd  = input.float(1.0, "MACD",           minval = 0, maxval = 3, step = 0.5, group = grpW)
+wVwap  = input.float(1.0, "VWAP",           minval = 0, maxval = 3, step = 0.5, group = grpW)
+wFib   = input.float(1.0, "Fibonacci",      minval = 0, maxval = 3, step = 0.5, group = grpW)
+wVix   = input.float(1.0, "VIX regime",     minval = 0, maxval = 3, step = 0.5, group = grpW)
+wDelta = input.float(1.0, "Delta proxy",    minval = 0, maxval = 3, step = 0.5, group = grpW)
+wGamma = input.float(1.0, "Gamma proxy",    minval = 0, maxval = 3, step = 0.5, group = grpW)
+wTheta = input.float(1.0, "Theta proxy",    minval = 0, maxval = 3, step = 0.5, group = grpW)
+wVega  = input.float(1.0, "Vega proxy",     minval = 0, maxval = 3, step = 0.5, group = grpW)
+wCdl   = input.float(1.0, "Candlestick",    minval = 0, maxval = 3, step = 0.5, group = grpW)
+wVol   = input.float(1.0, "Volume",         minval = 0, maxval = 3, step = 0.5, group = grpW)
+
+grpVeto = "Veto checks (must pass or verdict is blocked)"
+vetoTrend = input.bool(false, "Trend is required",     group = grpVeto)
+vetoHtf   = input.bool(true,  "HTF trend is required", group = grpVeto)
+vetoVix   = input.bool(true,  "VIX regime is required", group = grpVeto)
+
+grpRisk = "Risk & sizing"
 atrLen   = input.int(14, "ATR length", minval = 1, group = grpRisk)
 atrStop  = input.float(1.5, "Stop distance (× ATR)",  minval = 0.1, step = 0.1, group = grpRisk)
 rrTarget = input.float(2.0, "Target (R multiple)",    minval = 0.5, step = 0.5, group = grpRisk)
+acctSize = input.float(25000.0, "Account size", minval = 1, group = grpRisk)
+riskPct  = input.float(1.0, "Risk per trade (%)", minval = 0.05, step = 0.25, group = grpRisk)
 
 // ═════════════════════════ CORE SERIES ═══════════════════════════════════════
 atrVal  = ta.atr(atrLen)
 hasVol  = not na(volume)
 
-// ── Trend ───────────────────────────────────────────────────────────────────
+// ── 1 · Trend ───────────────────────────────────────────────────────────────
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
 trendBull = close > emaSlow and emaFast > emaSlow
 trendBear = close < emaSlow and emaFast < emaSlow
 
-// ── RSI ─────────────────────────────────────────────────────────────────────
+// ── 2 · Higher-timeframe trend ──────────────────────────────────────────────
+[htfClose, htfFast, htfSlow] = request.security(syminfo.tickerid, htfTf,
+     [close, ta.ema(close, emaFastLen), ta.ema(close, emaSlowLen)], lookahead = barmerge.lookahead_off)
+htfBull = not na(htfSlow) and htfClose > htfSlow and htfFast > htfSlow
+htfBear = not na(htfSlow) and htfClose < htfSlow and htfFast < htfSlow
+
+// ── 3 · RSI ─────────────────────────────────────────────────────────────────
 rsiVal  = ta.rsi(close, rsiLen)
 rsiBull = (rsiVal > 50 and rsiVal < rsiOb) or ta.crossover(rsiVal, rsiOs)
 rsiBear = (rsiVal < 50 and rsiVal > rsiOs) or ta.crossunder(rsiVal, rsiOb)
 
-// ── MACD ────────────────────────────────────────────────────────────────────
+// ── 4 · RSI divergence (pivot-based, confirmed divLbR bars after the pivot) ─
+plFound = not na(ta.pivotlow(rsiVal, divLbL, divLbR))
+phFound = not na(ta.pivothigh(rsiVal, divLbL, divLbR))
+bullDivNow = plFound and rsiVal[divLbR] > ta.valuewhen(plFound, rsiVal[divLbR], 1) and low[divLbR]  < ta.valuewhen(plFound, low[divLbR], 1)
+bearDivNow = phFound and rsiVal[divLbR] < ta.valuewhen(phFound, rsiVal[divLbR], 1) and high[divLbR] > ta.valuewhen(phFound, high[divLbR], 1)
+sinceBullDiv = ta.barssince(bullDivNow)
+sinceBearDiv = ta.barssince(bearDivNow)
+divBull = not na(sinceBullDiv) and sinceBullDiv <= divValid
+divBear = not na(sinceBearDiv) and sinceBearDiv <= divValid
+
+// ── 5 · MACD ────────────────────────────────────────────────────────────────
 [macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
 macdBull = macdLine > macdSignal and macdHist > macdHist[1]
 macdBear = macdLine < macdSignal and macdHist < macdHist[1]
 
-// ── Anchored VWAP + st-dev bands ────────────────────────────────────────────
-// Intraday charts anchor to the session (day); daily charts to the month;
-// weekly/monthly charts to the year — a daily anchor would reset every bar.
-anchorTf   = timeframe.isintraday ? "D" : timeframe.isdaily ? "M" : "12M"
-newSession = timeframe.change(anchorTf)
+// ── 6 · Anchored VWAP + st-dev bands ────────────────────────────────────────
+autoTf   = timeframe.isintraday ? "D" : timeframe.isdaily ? "M" : "12M"
+anchorTf = vwapAnchor == "Auto" ? autoTf : vwapAnchor == "Session" ? "D" : vwapAnchor == "Week" ? "W" : vwapAnchor == "Month" ? "M" : "12M"
+newSession = vwapAnchor == "Custom date" ? time >= vwapAnchorDate and time[1] < vwapAnchorDate : timeframe.change(anchorTf)
 var float sumPV  = 0.0
 var float sumV   = 0.0
 var float sumPV2 = 0.0
@@ -113,13 +178,29 @@ vwapUpper = vwapVal + vwapMult * vwapDev
 vwapLower = vwapVal - vwapMult * vwapDev
 vwapBull  = hasVol and not na(vwapVal) and close > vwapVal
 vwapBear  = hasVol and not na(vwapVal) and close < vwapVal
+anchorDesc = vwapAnchor == "Auto" ? (timeframe.isintraday ? "session" : timeframe.isdaily ? "monthly" : "yearly") : vwapAnchor
 
-// ── Auto Fibonacci retracement ──────────────────────────────────────────────
-swingHigh = ta.highest(high, fibLen)
-swingLow  = ta.lowest(low, fibLen)
-hiOffset  = ta.highestbars(high, fibLen)   // 0 = current bar, more negative = older
-loOffset  = ta.lowestbars(low, fibLen)
-upSwing   = hiOffset > loOffset            // high is more recent → impulse up
+// ── 7 · Auto Fibonacci retracement (pivot-anchored with window fallback) ────
+phVal = ta.pivothigh(high, fibPivLen, fibPivLen)
+plVal = ta.pivotlow(low, fibPivLen, fibPivLen)
+var float pivHi    = na
+var int   pivHiBar = na
+var float pivLo    = na
+var int   pivLoBar = na
+if not na(phVal)
+    pivHi    := phVal
+    pivHiBar := bar_index - fibPivLen
+if not na(plVal)
+    pivLo    := plVal
+    pivLoBar := bar_index - fibPivLen
+winHigh  = ta.highest(high, fibLen)
+winLow   = ta.lowest(low, fibLen)
+hiOffset = ta.highestbars(high, fibLen)
+loOffset = ta.lowestbars(low, fibLen)
+pivotsOk  = usePivotFib and not na(pivHi) and not na(pivLo) and not na(pivHiBar) and not na(pivLoBar)
+swingHigh = pivotsOk ? pivHi : winHigh
+swingLow  = pivotsOk ? pivLo : winLow
+upSwing   = pivotsOk ? pivHiBar > pivLoBar : hiOffset > loOffset
 fibRange  = swingHigh - swingLow
 fibLevel(r) => upSwing ? swingHigh - fibRange * r : swingLow + fibRange * r
 fib236 = fibLevel(0.236)
@@ -136,16 +217,19 @@ fibBull = upSwing and fibNearKey
 fibBear = not upSwing and fibNearKey
 nearestFib = nearLevel(fib382) ? "38.2%" : nearLevel(fib500) ? "50%" : nearLevel(fib618) ? "61.8%" : "—"
 
-// ── VIX regime ──────────────────────────────────────────────────────────────
-[vixClose, vixPct] = request.security(vixSym, "D", [close, ta.percentrank(close, 252)], lookahead = barmerge.lookahead_off)
+// ── 8 · Volatility-index regime (symbol-aware) ──────────────────────────────
+autoVixSym = syminfo.ticker == "QQQ" or syminfo.ticker == "NDX" or str.contains(syminfo.ticker, "NQ") ? "CBOE:VXN" :
+     syminfo.ticker == "IWM" or syminfo.ticker == "RUT" ? "CBOE:RVX" : "CBOE:VIX"
+volIdxSym = vixAuto ? autoVixSym : vixSym
+[vixClose, vixPct] = request.security(volIdxSym, "D", [close, ta.percentrank(close, 252)], lookahead = barmerge.lookahead_off)
 vixRegime = vixClose < vixCalmMax ? "Calm" : vixClose > vixFearMin ? "Fear" : "Elevated"
 vixOk     = not na(vixClose) and vixClose < vixFearMin      // stand aside in panic tape
 // Realised vol of the charted symbol (annualised %) for the IV-vs-RV read
-logRet = math.log(close / close[1])
-realVol = ta.stdev(logRet, 20) * math.sqrt(252) * 100
+logRet    = math.log(close / close[1])
+realVol   = ta.stdev(logRet, 20) * math.sqrt(252) * 100
 ivPremium = vixClose - realVol
 
-// ── Greeks proxies ──────────────────────────────────────────────────────────
+// ── 9-12 · Greeks proxies ───────────────────────────────────────────────────
 // Delta ≈ directional exposure: regression slope over greekLen, ATR-normalised, clamped to [-1, 1]
 slope      = ta.linreg(close, greekLen, 0) - ta.linreg(close, greekLen, 1)
 deltaProxy = math.max(-1.0, math.min(1.0, atrVal > 0 ? slope * greekLen / atrVal : 0.0))
@@ -154,29 +238,26 @@ gammaProxy = deltaProxy - deltaProxy[3]
 // Theta ≈ time-decay risk: ADX below threshold = chop = premium bleed
 [diPlus, diMinus, adxVal] = ta.dmi(14, 14)
 thetaOk = adxVal >= adxThresh
-// Vega ≈ IV richness: high VIX percentile = expensive premium / vol-crush risk
+// Vega ≈ IV richness: high vol-index percentile = expensive premium / vol-crush risk
 vegaOk = vixPct <= vegaPctMax
-
 deltaBull = deltaProxy >  0.2
 deltaBear = deltaProxy < -0.2
 gammaBull = gammaProxy > 0
 gammaBear = gammaProxy < 0
 
-// ── Candlestick patterns ────────────────────────────────────────────────────
+// ── 13 · Candlestick patterns ───────────────────────────────────────────────
 body      = math.abs(close - open)
 candRange = math.max(high - low, syminfo.mintick)
 upperWick = high - math.max(close, open)
 lowerWick = math.min(close, open) - low
 avgBody   = ta.sma(body, 14)
-
-bullEngulf = close > open and close[1] < open[1] and close >= open[1] and open <= close[1] and body > body[1]
-bearEngulf = close < open and close[1] > open[1] and close <= open[1] and open >= close[1] and body > body[1]
+bullEngulf   = close > open and close[1] < open[1] and close >= open[1] and open <= close[1] and body > body[1]
+bearEngulf   = close < open and close[1] > open[1] and close <= open[1] and open >= close[1] and body > body[1]
 hammer       = lowerWick >= 2 * body and upperWick <= 0.3 * candRange and body > 0
 shootingStar = upperWick >= 2 * body and lowerWick <= 0.3 * candRange and body > 0
 doji         = body <= 0.1 * candRange
 morningStar  = close[2] < open[2] and body[2] > avgBody and body[1] < 0.5 * avgBody and close > open and close > (open[2] + close[2]) / 2
 eveningStar  = close[2] > open[2] and body[2] > avgBody and body[1] < 0.5 * avgBody and close < open and close < (open[2] + close[2]) / 2
-
 bullPattern = bullEngulf or hammer or morningStar
 bearPattern = bearEngulf or shootingStar or eveningStar
 sinceBull = ta.barssince(bullPattern)
@@ -189,33 +270,50 @@ if bullPattern
 if bearPattern
     lastCdlName := bearEngulf ? "Bear Engulfing" : shootingStar ? "Shooting Star" : "Evening Star"
 
-// ── Volume confirmation ─────────────────────────────────────────────────────
-volSma  = ta.sma(volume, 20)
-volOk   = hasVol and not na(volSma) and volume > volSma
+// ── 14 · Volume confirmation ────────────────────────────────────────────────
+volSma = ta.sma(volume, 20)
+volOk  = hasVol and not na(volSma) and volume > volSma
+
+// ── Session/time filter ─────────────────────────────────────────────────────
+inSess = not na(time(timeframe.period, sessWindow))
+var int sessOpenT = na
+if inSess and not inSess[1]
+    sessOpenT := time
+minsSinceOpen = inSess and not na(sessOpenT) ? (time - sessOpenT) / 60000.0 : 0.0
+timeOk = not useSession or not timeframe.isintraday or (inSess and minsSinceOpen >= skipOpenMins)
 
 // ═════════════════════════ SCORING & VERDICT ═════════════════════════════════
-// 12 checks. Direction-neutral checks (VIX, Theta, Vega, Volume) count for both sides.
-bullChecks = array.from(trendBull, rsiBull, macdBull, vwapBull, fibBull, vixOk, deltaBull, gammaBull, thetaOk, vegaOk, cdlBull, volOk)
-bearChecks = array.from(trendBear, rsiBear, macdBear, vwapBear, fibBear, vixOk, deltaBear, gammaBear, thetaOk, vegaOk, cdlBear, volOk)
+// 14 checks. Direction-neutral checks (VIX, Theta, Vega, Volume) count for both sides.
+bullChecks = array.from(trendBull, htfBull, rsiBull, divBull, macdBull, vwapBull, fibBull, vixOk, deltaBull, gammaBull, thetaOk, vegaOk, cdlBull, volOk)
+bearChecks = array.from(trendBear, htfBear, rsiBear, divBear, macdBear, vwapBear, fibBear, vixOk, deltaBear, gammaBear, thetaOk, vegaOk, cdlBear, volOk)
+weights    = array.from(wTrend, wHtf, wRsi, wDiv, wMacd, wVwap, wFib, wVix, wDelta, wGamma, wTheta, wVega, wCdl, wVol)
 
-countTrue(array<bool> a) =>
-    int n = 0
-    for v in a
-        n += v ? 1 : 0
-    n
-bullScore = countTrue(bullChecks)
-bearScore = countTrue(bearChecks)
+weightedScore(array<bool> checks, array<float> ws) =>
+    float s = 0.0
+    for i = 0 to array.size(checks) - 1
+        s += array.get(checks, i) ? array.get(ws, i) : 0.0
+    s
+totalW     = array.sum(weights)
+bullScoreW = weightedScore(bullChecks, weights)
+bearScoreW = weightedScore(bearChecks, weights)
+bullPct    = totalW > 0 ? 100 * bullScoreW / totalW : 0.0
+bearPct    = totalW > 0 ? 100 * bearScoreW / totalW : 0.0
 
-goLong  = bullScore >= minScore and bullScore > bearScore
-goShort = bearScore >= minScore and bearScore > bullScore
-verdict = goLong ? "GO LONG" : goShort ? "GO SHORT" : "STAND ASIDE"
+vetoLongOk  = (not vetoTrend or trendBull) and (not vetoHtf or htfBull) and (not vetoVix or vixOk)
+vetoShortOk = (not vetoTrend or trendBear) and (not vetoHtf or htfBear) and (not vetoVix or vixOk)
 
-// ── Risk plan (ATR based) ───────────────────────────────────────────────────
-stopDist   = atrStop * atrVal
-longStop   = close - stopDist
-longTarget = close + stopDist * rrTarget
-shortStop  = close + stopDist
+goLong  = timeOk and vetoLongOk  and bullPct >= minScorePct and bullScoreW > bearScoreW
+goShort = timeOk and vetoShortOk and bearPct >= minScorePct and bearScoreW > bullScoreW
+verdict = not timeOk ? "OFF-HOURS" : goLong ? "GO LONG" : goShort ? "GO SHORT" : "STAND ASIDE"
+
+// ── Risk plan & position size ───────────────────────────────────────────────
+stopDist    = atrStop * atrVal
+longStop    = close - stopDist
+longTarget  = close + stopDist * rrTarget
+shortStop   = close + stopDist
 shortTarget = close - stopDist * rrTarget
+riskCash    = acctSize * riskPct / 100
+posQty      = not na(stopDist) and stopDist > 0 ? riskCash / stopDist : na
 
 // ═════════════════════════ PLOTS ═════════════════════════════════════════════
 plot(showEmas ? emaFast : na, "EMA fast", color = color.new(color.orange, 20))
@@ -229,17 +327,18 @@ fill(pUp, pDn, color = color.new(color.teal, 94), title = "VWAP band")
 plotshape(showPatterns and bullPattern, "Bull pattern", shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.tiny)
 plotshape(showPatterns and bearPattern, "Bear pattern", shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.tiny)
 plotshape(showPatterns and doji,        "Doji",         shape.diamond,      location.abovebar, color.new(color.gray, 40), size = size.tiny)
+plotshape(showDivs and bullDivNow, "Bull divergence", shape.labelup,   location.belowbar, color.new(color.green, 20), text = "D", textcolor = color.white, size = size.tiny, offset = -divLbR)
+plotshape(showDivs and bearDivNow, "Bear divergence", shape.labeldown, location.abovebar, color.new(color.red, 20),   text = "D", textcolor = color.white, size = size.tiny, offset = -divLbR)
 
 // Verdict background flash on the bar the signal fires
-longFire  = goLong  and not goLong[1]
-shortFire = goShort and not goShort[1]
+longFire  = goLong  and not goLong[1]  and (not confirmOnly or barstate.isconfirmed)
+shortFire = goShort and not goShort[1] and (not confirmOnly or barstate.isconfirmed)
 bgcolor(longFire ? color.new(color.green, 82) : shortFire ? color.new(color.red, 82) : na, title = "Verdict trigger")
 
 // ── Fibonacci lines (redrawn on the live bar) ───────────────────────────────
-var array<line>  fibLines  = array.new<line>()
-var array<label> fibTags   = array.new<label>()
-drawFib(float lvl, string txt, color col) =>
-    x1 = math.max(bar_index - fibLen, 0)
+var array<line>  fibLines = array.new<line>()
+var array<label> fibTags  = array.new<label>()
+drawFib(int x1, float lvl, string txt, color col) =>
     array.push(fibLines, line.new(x1, lvl, bar_index, lvl, extend = extend.right, color = col, style = line.style_dashed))
     array.push(fibTags,  label.new(bar_index, lvl, txt, style = label.style_label_left, textcolor = col, color = color.new(color.black, 100), size = size.small))
 if barstate.islast and showFib
@@ -249,20 +348,22 @@ if barstate.islast and showFib
         label.delete(t)
     array.clear(fibLines)
     array.clear(fibTags)
-    drawFib(upSwing ? swingHigh : swingLow, "0%",    color.new(color.gray, 30))
-    drawFib(fib236, "23.6%", color.new(color.aqua, 20))
-    drawFib(fib382, "38.2%", color.new(color.green, 10))
-    drawFib(fib500, "50%",   color.new(color.orange, 10))
-    drawFib(fib618, "61.8%", color.new(color.green, 10))
-    drawFib(fib786, "78.6%", color.new(color.aqua, 20))
-    drawFib(upSwing ? swingLow : swingHigh, "100%",  color.new(color.gray, 30))
+    rawX1 = pivotsOk ? math.min(pivHiBar, pivLoBar) : bar_index - fibLen
+    fibX1 = math.max(math.max(rawX1, 0), bar_index - 4000)
+    drawFib(fibX1, upSwing ? swingHigh : swingLow, "0%",    color.new(color.gray, 30))
+    drawFib(fibX1, fib236, "23.6%", color.new(color.aqua, 20))
+    drawFib(fibX1, fib382, "38.2%", color.new(color.green, 10))
+    drawFib(fibX1, fib500, "50%",   color.new(color.orange, 10))
+    drawFib(fibX1, fib618, "61.8%", color.new(color.green, 10))
+    drawFib(fibX1, fib786, "78.6%", color.new(color.aqua, 20))
+    drawFib(fibX1, upSwing ? swingLow : swingHigh, "100%",  color.new(color.gray, 30))
 
 // ═════════════════════════ CHECKLIST TABLE ═══════════════════════════════════
 posFrom(string s) => s == "Top Right" ? position.top_right : s == "Top Left" ? position.top_left : s == "Bottom Right" ? position.bottom_right : s == "Bottom Left" ? position.bottom_left : s == "Middle Left" ? position.middle_left : position.middle_right
 posOpt  = posFrom(tablePos)
 txtSize = tableSize == "Tiny" ? size.tiny : tableSize == "Small" ? size.small : size.normal
 
-var table tbl = table.new(posOpt, 4, 19, bgcolor = color.new(color.black, 25), border_width = 1, border_color = color.new(color.gray, 70))
+var table tbl = table.new(posOpt, 4, 22, bgcolor = color.new(color.black, 25), border_width = 1, border_color = color.new(color.gray, 70))
 
 cPass = color.new(color.green, 55)
 cFail = color.new(color.red, 60)
@@ -270,6 +371,7 @@ cNeut = color.new(color.gray, 65)
 cTxt  = color.white
 
 mark(bool ok) => ok ? "✔" : "✘"
+wTag(float w, bool veto) => (w == 1.0 ? "" : " ×" + str.tostring(w, "#.#")) + (veto ? " •veto" : "")
 cellPair(int row, string name, string value, bool longOk, bool shortOk) =>
     table.cell(tbl, 0, row, name,  text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
     table.cell(tbl, 1, row, value, text_color = cTxt, text_size = txtSize)
@@ -283,48 +385,54 @@ if barstate.islast
     table.cell(tbl, 2, 0, "Long",  text_color = color.new(color.green, 10), text_size = txtSize)
     table.cell(tbl, 3, 0, "Short", text_color = color.new(color.red, 10),  text_size = txtSize)
 
-    cellPair(1,  "Trend (EMA " + str.tostring(emaFastLen) + "/" + str.tostring(emaSlowLen) + ")", close > emaSlow ? "Above" : "Below", trendBull, trendBear)
-    cellPair(2,  "RSI (" + str.tostring(rsiLen) + ")",       str.tostring(rsiVal, "#.#"),                       rsiBull,  rsiBear)
-    cellPair(3,  "MACD",                                     macdLine > macdSignal ? "Bull cross" : "Bear cross", macdBull, macdBear)
-    cellPair(4,  "VWAP (" + (timeframe.isintraday ? "session" : timeframe.isdaily ? "monthly" : "yearly") + ")", hasVol ? (close > vwapVal ? "Above" : "Below") : "no volume", vwapBull, vwapBear)
-    cellPair(5,  "Fibonacci",                                (upSwing ? "Up-swing " : "Down-swing ") + nearestFib, fibBull, fibBear)
-    cellPair(6,  "VIX regime",                               str.tostring(vixClose, "#.#") + " · " + vixRegime,  vixOk,   vixOk)
-    cellPair(7,  "Δ Delta (direction)",                      str.tostring(deltaProxy, "#.##"),                   deltaBull, deltaBear)
-    cellPair(8,  "Γ Gamma (acceleration)",                   str.tostring(gammaProxy, "#.##"),                   gammaBull, gammaBear)
-    cellPair(9,  "Θ Theta (chop risk, ADX)",                 str.tostring(adxVal, "#.#"),                        thetaOk, thetaOk)
-    cellPair(10, "ν Vega (IV rich? VIX %ile)",               str.tostring(vixPct, "#") + "% · IV-RV " + str.tostring(ivPremium, "#.#"), vegaOk, vegaOk)
-    cellPair(11, "Candlestick (≤" + str.tostring(cdlLookback) + " bars)", cdlBull or cdlBear ? lastCdlName : doji ? "Doji" : "None", cdlBull, cdlBear)
-    cellPair(12, "Volume vs 20-SMA",                         hasVol ? (volOk ? "Above avg" : "Below avg") : "n/a", volOk, volOk)
+    cellPair(1,  "Trend (EMA " + str.tostring(emaFastLen) + "/" + str.tostring(emaSlowLen) + ")" + wTag(wTrend, vetoTrend), close > emaSlow ? "Above" : "Below", trendBull, trendBear)
+    cellPair(2,  "HTF trend (" + htfTf + ")" + wTag(wHtf, vetoHtf), htfBull ? "Bull" : htfBear ? "Bear" : "Mixed", htfBull, htfBear)
+    cellPair(3,  "RSI (" + str.tostring(rsiLen) + ")" + wTag(wRsi, false), str.tostring(rsiVal, "#.#"), rsiBull, rsiBear)
+    cellPair(4,  "RSI divergence" + wTag(wDiv, false), divBull ? "Bull " + str.tostring(sinceBullDiv) + "b ago" : divBear ? "Bear " + str.tostring(sinceBearDiv) + "b ago" : "None", divBull, divBear)
+    cellPair(5,  "MACD" + wTag(wMacd, false), macdLine > macdSignal ? "Bull cross" : "Bear cross", macdBull, macdBear)
+    cellPair(6,  "VWAP (" + anchorDesc + ")" + wTag(wVwap, false), hasVol ? (close > vwapVal ? "Above" : "Below") : "no volume", vwapBull, vwapBear)
+    cellPair(7,  "Fibonacci" + (pivotsOk ? " (pivot)" : " (window)") + wTag(wFib, false), (upSwing ? "Up-swing " : "Down-swing ") + nearestFib, fibBull, fibBear)
+    cellPair(8,  "Vol idx (" + volIdxSym + ")" + wTag(wVix, vetoVix), str.tostring(vixClose, "#.#") + " · " + vixRegime, vixOk, vixOk)
+    cellPair(9,  "Δ Delta (direction)" + wTag(wDelta, false), str.tostring(deltaProxy, "#.##"), deltaBull, deltaBear)
+    cellPair(10, "Γ Gamma (acceleration)" + wTag(wGamma, false), str.tostring(gammaProxy, "#.##"), gammaBull, gammaBear)
+    cellPair(11, "Θ Theta (chop risk, ADX)" + wTag(wTheta, false), str.tostring(adxVal, "#.#"), thetaOk, thetaOk)
+    cellPair(12, "ν Vega (IV rich? %ile)" + wTag(wVega, false), str.tostring(vixPct, "#") + "% · IV-RV " + str.tostring(ivPremium, "#.#"), vegaOk, vegaOk)
+    cellPair(13, "Candlestick (≤" + str.tostring(cdlLookback) + " bars)" + wTag(wCdl, false), cdlBull or cdlBear ? lastCdlName : doji ? "Doji" : "None", cdlBull, cdlBear)
+    cellPair(14, "Volume vs 20-SMA" + wTag(wVol, false), hasVol ? (volOk ? "Above avg" : "Below avg") : "n/a", volOk, volOk)
 
     // score
-    table.cell(tbl, 0, 13, "Score (need ≥ " + str.tostring(minScore) + ")", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
-    table.cell(tbl, 1, 13, "", bgcolor = cNeut, text_size = txtSize)
-    table.cell(tbl, 2, 13, str.tostring(bullScore) + "/12", bgcolor = bullScore >= minScore ? cPass : cNeut, text_color = cTxt, text_size = txtSize)
-    table.cell(tbl, 3, 13, str.tostring(bearScore) + "/12", bgcolor = bearScore >= minScore ? cPass : cNeut, text_color = cTxt, text_size = txtSize)
+    table.cell(tbl, 0, 15, "Score (need ≥ " + str.tostring(minScorePct, "#") + "%)", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+    table.cell(tbl, 1, 15, "", bgcolor = cNeut, text_size = txtSize)
+    table.cell(tbl, 2, 15, str.tostring(bullPct, "#") + "%", bgcolor = bullPct >= minScorePct ? cPass : cNeut, text_color = cTxt, text_size = txtSize)
+    table.cell(tbl, 3, 15, str.tostring(bearPct, "#") + "%", bgcolor = bearPct >= minScorePct ? cPass : cNeut, text_color = cTxt, text_size = txtSize)
 
     // verdict
     vColor = goLong ? color.new(color.green, 25) : goShort ? color.new(color.red, 30) : color.new(color.gray, 40)
-    table.cell(tbl, 0, 14, "VERDICT", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
-    table.cell(tbl, 1, 14, verdict, bgcolor = vColor, text_color = cTxt, text_size = txtSize)
-    table.merge_cells(tbl, 1, 14, 3, 14)
+    vetoNote = not timeOk ? "" : goLong or goShort ? "" : not vetoLongOk and not vetoShortOk ? " (veto)" : ""
+    table.cell(tbl, 0, 16, "VERDICT", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+    table.cell(tbl, 1, 16, verdict + vetoNote, bgcolor = vColor, text_color = cTxt, text_size = txtSize)
+    table.merge_cells(tbl, 1, 16, 3, 16)
 
     // risk plan
-    table.cell(tbl, 0, 15, "Entry ≈", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
-    table.cell(tbl, 1, 15, str.tostring(close, format.mintick), text_color = cTxt, text_size = txtSize)
-    table.merge_cells(tbl, 1, 15, 3, 15)
-    table.cell(tbl, 0, 16, "Stop (" + str.tostring(atrStop, "#.#") + "×ATR)", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
-    table.cell(tbl, 1, 16, str.tostring(goShort ? shortStop : longStop, format.mintick), text_color = cTxt, text_size = txtSize)
-    table.merge_cells(tbl, 1, 16, 3, 16)
-    table.cell(tbl, 0, 17, "Target (" + str.tostring(rrTarget, "#.#") + "R)", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
-    table.cell(tbl, 1, 17, str.tostring(goShort ? shortTarget : longTarget, format.mintick), text_color = cTxt, text_size = txtSize)
+    table.cell(tbl, 0, 17, "Entry ≈", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+    table.cell(tbl, 1, 17, str.tostring(close, format.mintick), text_color = cTxt, text_size = txtSize)
     table.merge_cells(tbl, 1, 17, 3, 17)
+    table.cell(tbl, 0, 18, "Stop (" + str.tostring(atrStop, "#.#") + "×ATR)", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+    table.cell(tbl, 1, 18, str.tostring(goShort ? shortStop : longStop, format.mintick), text_color = cTxt, text_size = txtSize)
+    table.merge_cells(tbl, 1, 18, 3, 18)
+    table.cell(tbl, 0, 19, "Target (" + str.tostring(rrTarget, "#.#") + "R)", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+    table.cell(tbl, 1, 19, str.tostring(goShort ? shortTarget : longTarget, format.mintick), text_color = cTxt, text_size = txtSize)
+    table.merge_cells(tbl, 1, 19, 3, 19)
+    table.cell(tbl, 0, 20, "Size (" + str.tostring(riskPct, "#.##") + "% risk)", text_color = cTxt, text_size = txtSize, text_halign = text.align_left)
+    table.cell(tbl, 1, 20, na(posQty) ? "n/a" : str.tostring(posQty, "#.##") + " units", text_color = cTxt, text_size = txtSize)
+    table.merge_cells(tbl, 1, 20, 3, 20)
 
     // footnote
-    table.cell(tbl, 0, 18, "Greeks are price/VIX proxies — not options-chain data", text_color = color.new(color.gray, 20), text_size = size.tiny, text_halign = text.align_left)
-    table.merge_cells(tbl, 0, 18, 3, 18)
+    table.cell(tbl, 0, 21, "Greeks are price/VIX proxies — not options-chain data", text_color = color.new(color.gray, 20), text_size = size.tiny, text_halign = text.align_left)
+    table.merge_cells(tbl, 0, 21, 3, 21)
 
 // ═════════════════════════ LEGEND ════════════════════════════════════════════
-var table lgd = table.new(posFrom(legendPos), 2, 11, bgcolor = color.new(color.black, 25), border_width = 1, border_color = color.new(color.gray, 70))
+var table lgd = table.new(posFrom(legendPos), 2, 12, bgcolor = color.new(color.black, 25), border_width = 1, border_color = color.new(color.gray, 70))
 
 legendRow(int row, string sym, color symCol, string txt) =>
     table.cell(lgd, 0, row, sym, text_color = symCol, text_size = txtSize)
@@ -335,16 +443,25 @@ if barstate.islast and showLegend
     table.merge_cells(lgd, 0, 0, 1, 0)
     legendRow(1,  "━",   color.new(color.orange, 20), "EMA " + str.tostring(emaFastLen) + " — fast trend")
     legendRow(2,  "━",   color.new(color.blue, 20),   "EMA " + str.tostring(emaSlowLen) + " — slow trend")
-    legendRow(3,  "━",   color.new(color.teal, 0),    "VWAP · shaded ±" + str.tostring(vwapMult, "#.#") + "σ band")
+    legendRow(3,  "━",   color.new(color.teal, 0),    "VWAP (" + anchorDesc + ") · shaded ±" + str.tostring(vwapMult, "#.#") + "σ band")
     legendRow(4,  "╌╌",  color.new(color.gray, 20),   "Auto Fibonacci levels (0–100%)")
     legendRow(5,  "▲",   color.new(color.green, 0),   "Bull pattern: Engulfing / Hammer / Morning Star")
     legendRow(6,  "▼",   color.new(color.red, 0),     "Bear pattern: Engulfing / Shooting Star / Evening Star")
     legendRow(7,  "◆",   color.new(color.gray, 40),   "Doji — indecision (info only, not scored)")
-    legendRow(8,  "▓",   color.new(color.green, 40),  "Background flash — GO verdict fires (green long / red short)")
-    legendRow(9,  "✔ ✘", cTxt,                        "Checklist: check passes / fails for that side")
-    legendRow(10, "Δ Γ Θ ν", color.new(color.yellow, 30), "Greeks are price/VIX proxies, not options-chain data")
+    legendRow(8,  "D",   color.new(color.green, 20),  "RSI divergence at the marked pivot (green bull / red bear)")
+    legendRow(9,  "▓",   color.new(color.green, 40),  "Background flash — GO verdict fires (green long / red short)")
+    legendRow(10, "✔ ✘", cTxt,                        "Checklist: check passes / fails · ×N = weight · •veto = required")
+    legendRow(11, "Δ Γ Θ ν", color.new(color.yellow, 30), "Greeks are price/VIX proxies, not options-chain data")
 
 // ═════════════════════════ ALERTS ════════════════════════════════════════════
 alertcondition(longFire,  "GO LONG — checklist passed",  "Pre-Trade Checklist: LONG setup — score threshold reached")
 alertcondition(shortFire, "GO SHORT — checklist passed", "Pre-Trade Checklist: SHORT setup — score threshold reached")
 alertcondition(longFire or shortFire, "Any GO verdict",  "Pre-Trade Checklist: setup fired (long or short)")
+
+// Webhook-ready dynamic alert (enable via "Any alert() function call" in the alert dialog)
+if longFire or shortFire
+    sideTxt   = longFire ? "long" : "short"
+    stopTxt   = str.tostring(longFire ? longStop : shortStop, format.mintick)
+    targetTxt = str.tostring(longFire ? longTarget : shortTarget, format.mintick)
+    scoreTxt  = str.tostring(longFire ? bullPct : bearPct, "#.#")
+    alert('{"ticker":"' + syminfo.ticker + '","timeframe":"' + timeframe.period + '","side":"' + sideTxt + '","scorePct":' + scoreTxt + ',"entry":' + str.tostring(close, format.mintick) + ',"stop":' + stopTxt + ',"target":' + targetTxt + ',"qty":' + (na(posQty) ? "null" : str.tostring(posQty, "#.##")) + '}', alert.freq_once_per_bar)

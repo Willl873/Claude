@@ -1,13 +1,25 @@
-# Confluence Pre-Trade Checklist — TradingView Indicator
+# Confluence Pre-Trade Checklist — TradingView Indicator + Strategy
 
-A Pine Script v6 indicator that combines **RSI, Fibonacci, VIX, greeks (proxies), VWAP,
-MACD, and candlestick patterns** into a single on-chart **pre-trade checklist**. Each
-module produces a Long-side and Short-side pass/fail; the checklist scores both sides
-and prints a verdict — **GO LONG / GO SHORT / STAND ASIDE** — along with an ATR-based
-entry, stop, and target.
+A Pine Script v6 indicator that combines **RSI, RSI divergence, Fibonacci, VIX, greeks
+(proxies), VWAP, MACD, candlestick patterns, and higher-timeframe confirmation** into a
+single on-chart **pre-trade checklist**. Each of the 14 checks produces a Long-side and
+Short-side pass/fail and carries a user-configurable **weight**; three checks can be
+marked as **vetoes** that block a trade outright. The checklist scores both sides and
+prints a verdict — **GO LONG / GO SHORT / STAND ASIDE** — along with an ATR-based
+entry, stop, target, and a risk-based position size.
+
+A backtestable **strategy twin** (`confluence-pretrade-strategy.pine`) runs the same
+logic through TradingView's Strategy Tester.
 
 > ⚠️ Educational tool only. Nothing here is financial advice, and no indicator
 > combination guarantees profitable trades.
+
+## Files
+
+| File | What it is |
+|------|------------|
+| `confluence-pretrade-checklist.pine` | The on-chart indicator: checklist table, legend, fibs, VWAP, markers, alerts |
+| `confluence-pretrade-strategy.pine`  | Strategy twin for backtesting the GO verdicts (win rate, expectancy, drawdown) |
 
 ## Installation
 
@@ -15,30 +27,47 @@ entry, stop, and target.
 2. Open the **Pine Editor** (bottom panel).
 3. Delete the boilerplate, paste the entire contents of
    [`confluence-pretrade-checklist.pine`](confluence-pretrade-checklist.pine).
-4. Click **Add to chart**. The checklist table appears in the top-right corner
-   (position configurable in settings).
+4. Click **Add to chart**. The checklist appears top-right, the legend bottom-left
+   (both positions configurable).
 
-## The 12 checks
+For backtesting, repeat with
+[`confluence-pretrade-strategy.pine`](confluence-pretrade-strategy.pine) and open the
+**Strategy Tester** tab.
+
+## The 14 checks
 
 | # | Check | Long passes when | Short passes when |
 |---|-------|------------------|-------------------|
 | 1 | **Trend** (EMA 50/200) | Price above slow EMA and fast EMA > slow EMA | Mirrored |
-| 2 | **RSI** (14) | RSI in the 50–70 zone, or just crossed up out of oversold | RSI in 30–50, or just crossed down out of overbought |
-| 3 | **MACD** (12/26/9) | MACD above signal and histogram rising | MACD below signal and histogram falling |
-| 4 | **VWAP** (anchored) | Price above VWAP | Price below VWAP |
-| 5 | **Fibonacci** (auto) | Up-swing pulling back into the 38.2/50/61.8% zone | Down-swing rallying into the 38.2/50/61.8% zone |
-| 6 | **VIX regime** | VIX below the "fear" threshold (default 30) — direction-neutral | Same |
-| 7 | **Δ Delta proxy** | Directional exposure > +0.2 | < −0.2 |
-| 8 | **Γ Gamma proxy** | Momentum accelerating up | Accelerating down |
-| 9 | **Θ Theta proxy** | ADX ≥ 20 (trending tape — chop bleeds option premium) — neutral | Same |
-| 10 | **ν Vega proxy** | VIX percentile ≤ 80 (premium not extreme) — neutral | Same |
-| 11 | **Candlestick** | Bull Engulfing / Hammer / Morning Star within last 3 bars | Bear Engulfing / Shooting Star / Evening Star |
-| 12 | **Volume** | Current volume above its 20-bar average — neutral | Same |
+| 2 | **HTF trend** (default: daily) | Same trend test passes on the higher timeframe | Mirrored |
+| 3 | **RSI** (14) | RSI in the 50–70 zone, or just crossed up out of oversold | RSI in 30–50, or just crossed down out of overbought |
+| 4 | **RSI divergence** | Price made a lower low while RSI made a higher low (recent, pivot-confirmed) | Price higher high, RSI lower high |
+| 5 | **MACD** (12/26/9) | MACD above signal and histogram rising | MACD below signal and histogram falling |
+| 6 | **VWAP** (anchored) | Price above VWAP | Price below VWAP |
+| 7 | **Fibonacci** (pivot-anchored) | Up-swing pulling back into the 38.2/50/61.8% zone | Down-swing rallying into the 38.2/50/61.8% zone |
+| 8 | **Vol-index regime** | Vol index below the "fear" threshold (default 30) — direction-neutral | Same |
+| 9 | **Δ Delta proxy** | Directional exposure > +0.2 | < −0.2 |
+| 10 | **Γ Gamma proxy** | Momentum accelerating up | Accelerating down |
+| 11 | **Θ Theta proxy** | ADX ≥ 20 (trending tape — chop bleeds option premium) — neutral | Same |
+| 12 | **ν Vega proxy** | Vol-index percentile ≤ 80 (premium not extreme) — neutral | Same |
+| 13 | **Candlestick** | Bull Engulfing / Hammer / Morning Star within last 3 bars | Bear Engulfing / Shooting Star / Evening Star |
+| 14 | **Volume** | Current volume above its 20-bar average — neutral | Same |
 
-The verdict fires **GO LONG** when the long side scores at least the configurable
-minimum (default **7 of 12**) *and* beats the short side (and vice versa). Anything
-else is **STAND ASIDE**. Three alert conditions are included (long setup, short
-setup, any setup) — attach them via TradingView's *Create Alert* dialog.
+## Scoring, weights, and vetoes
+
+- Every check has a **weight** (0–3, default 1; 0 disables it). The side's score is
+  the weighted sum of its passing checks, shown as a **percentage of total weight**.
+- A **GO** verdict requires: score % ≥ the threshold (default **60%**), the winning
+  side beating the other, all enabled **vetoes** passing, and the session filter (if
+  on) allowing trades.
+- **Veto checks** (settings → "Veto checks"): trend, HTF trend, and vol-index regime
+  can each be marked *required*. Defaults: **HTF trend and VIX regime are vetoes** —
+  no signal fires against the higher timeframe or into a panic tape. Weight (`×N`)
+  and veto (`•veto`) tags appear next to check names in the table.
+- Three static alert conditions are included (long / short / any), plus a
+  **webhook-ready `alert()`** that emits JSON (`ticker, timeframe, side, scorePct,
+  entry, stop, target, qty`) — create an alert with condition *"Any alert() function
+  call"* to use it for automation.
 
 ## About "the greeks" — read this
 
@@ -53,21 +82,22 @@ clearly-labelled proxies instead:
   Answers: "is directionality accelerating?"
 - **Theta ≈ time-decay risk** — ADX chop filter. Ranging markets (ADX < 20) are
   where long-premium positions bleed theta with no payoff.
-- **Vega ≈ IV richness** — the VIX's 1-year percentile plus a VIX-minus-realised-vol
-  spread shown in the table. High percentile = expensive premium and vol-crush risk
-  for option buyers.
+- **Vega ≈ IV richness** — the vol index's 1-year percentile plus an IV-minus-
+  realised-vol spread shown in the table. High percentile = expensive premium and
+  vol-crush risk for option buyers.
 
 If you trade options and need real greeks, get them from your broker's chain — then
-use rows 7–10 here as a regime sanity-check, not as a pricing model.
+use rows 9–12 here as a regime sanity-check, not as a pricing model.
 
 ## What's drawn on the chart
 
 - **EMAs** (50 orange, 200 blue) — trend context
-- **VWAP with ±2σ bands** (teal) — anchored to the session intraday, month on daily
-  charts, year on weekly+
-- **Auto Fibonacci retracement** — dashed levels (0 → 100%) from the highest/lowest
-  point of the lookback window (default 100 bars), direction-aware
+- **VWAP with ±2σ bands** (teal) — anchor selectable: auto (session intraday, month
+  on daily, year on weekly+), session, week, month, year, or a custom date
+- **Auto Fibonacci retracement** — dashed levels (0 → 100%) anchored to the last
+  confirmed swing pivots (falls back to the window high/low), direction-aware
 - **Candlestick pattern markers** — ▲ bull patterns, ▼ bear patterns, ◆ doji
+- **Divergence markers** — "D" labels at the RSI pivot where a divergence confirmed
 - **Background flash** — green/red on the bar a GO verdict first fires
 - **Legend** — a second on-chart table (bottom-left by default, toggleable) explaining
   every line, marker, and checklist symbol, including the greeks-are-proxies caveat
@@ -76,58 +106,69 @@ use rows 7–10 here as a regime sanity-check, not as a pricing model.
 
 | Group | Setting | Default |
 |-------|---------|---------|
-| General | Min checks for a GO verdict | 7 |
-| General | Show legend / legend position | On, bottom-left |
+| General | Min weighted score % for GO | 60% |
+| General | Confirmed-bars-only mode (no repaint) | Off |
+| General | Show legend / positions / text size | On |
 | Trend | Fast / slow EMA | 50 / 200 |
+| HTF | Confirmation timeframe | D |
 | RSI | Length, OB, OS | 14 / 70 / 30 |
+| Divergence | Pivot left/right, validity window | 5 / 2 / 14 bars |
 | MACD | Fast / slow / signal | 12 / 26 / 9 |
-| VWAP | Band multiplier | 2.0 σ |
-| Fibonacci | Swing lookback, proximity tolerance | 100 bars, 0.5 × ATR |
-| VIX | Symbol, calm / fear thresholds | CBOE:VIX, 20 / 30 |
-| Greeks | Delta lookback, min ADX, max VIX %ile | 14 / 20 / 80 |
+| VWAP | Band multiplier, anchor | 2.0 σ, Auto |
+| Fibonacci | Pivot anchoring, pivot strength, tolerance | On, 10, 0.5 × ATR |
+| Vol index | Auto-select (VXN/RVX/VIX), calm / fear | On, 20 / 30 |
+| Greeks | Delta lookback, min ADX, max percentile | 14 / 20 / 80 |
 | Candlesticks | Pattern validity window | 3 bars |
-| Risk | Stop distance, target | 1.5 × ATR, 2 R |
+| Session filter | Window, skip-open minutes | Off, 0930–1600, 15 min |
+| Weights | Per-check weight (0 disables) | 1.0 each |
+| Vetoes | Trend / HTF / VIX required | Off / **On** / **On** |
+| Risk | Stop, target, account size, risk % | 1.5 × ATR, 2 R, 25 000, 1% |
 
-## Improvement roadmap (ideas)
+## Backtesting with the strategy twin
 
-Roughly in order of expected value:
+The strategy file mirrors the indicator's checks and enters on GO verdicts at bar
+close (`process_orders_on_close`), exits at the ATR stop or the R-multiple target,
+and sizes each trade as `equity × risk% ÷ stop distance`. Use it to answer:
 
-1. **Divergence detection** — pivot-based RSI/MACD divergence (price makes a new
-   high/low, oscillator doesn't) as a 13th check; far stronger than level checks alone.
-2. **Higher-timeframe confirmation** — require the trend check to also pass on a
-   higher timeframe (e.g. 1h chart confirmed by the daily) via `request.security`.
-3. **Weighted scoring + veto checks** — not all checks are equal; let users weight
-   each check and mark some (e.g. trend, VIX) as *required* regardless of score.
-4. **Pivot-based fib anchors** — anchor the retracement to confirmed
-   `ta.pivothigh`/`ta.pivotlow` swings instead of the raw window high/low, so the fib
-   zone reflects actual structure.
-5. **Strategy port for backtesting** — a `strategy()` twin that enters on GO verdicts,
-   so win rate / expectancy per score threshold can be measured, plus a per-check
-   hit-rate table to prune checks that don't earn their keep.
-6. **Position-sizing row** — inputs for account size and risk %, output shares or
-   contracts from the ATR stop distance.
-7. **Symbol-aware vol index** — auto-select VXN for NDX/QQQ, RVX for RUT/IWM, etc.
-   instead of always VIX.
-8. **Session/time filter** — skip the first N minutes after the open and low-liquidity
-   hours; optionally an economic-calendar blackout input.
-9. **Confirmed-bar mode** — a toggle to evaluate only on closed bars
-   (`barstate.isconfirmed`) for repaint-free signals.
-10. **Webhook-ready alerts** — dynamic `alert()` JSON payloads carrying the full score
-    breakdown for broker/bot automation.
-11. **Multi-symbol screener** — a companion script scanning a watchlist for symbols
-    whose checklist currently scores ≥ threshold.
-12. **Custom VWAP anchoring** — user-selectable anchor (week, month, earnings date,
-    custom timestamp) like TradingView's anchored VWAP tool.
+- Does a higher score threshold actually improve expectancy on your symbol/timeframe?
+- Which checks earn their weight? Set a check's weight to 0, re-run, compare.
+- Long-only vs both sides, veto on vs off, session filter on vs off.
+
+Keep the two files' check logic in sync if you customise one.
+
+## Improvement roadmap
+
+Implemented in v2: ✅ divergence detection · ✅ HTF confirmation · ✅ weighted scoring
++ vetoes · ✅ pivot-anchored fibs · ✅ strategy/backtest port · ✅ position sizing ·
+✅ symbol-aware vol index · ✅ session/time filter · ✅ confirmed-bar mode ·
+✅ webhook JSON alerts · ✅ custom VWAP anchoring
+
+Remaining ideas:
+
+1. **Multi-symbol screener** — a companion script scanning a watchlist for symbols
+   whose checklist currently scores ≥ threshold (needs its own script; Pine limits
+   `request.security` fan-out per script).
+2. **Per-check hit-rate stats** — a table tracking each check's historical win rate
+   when it passed at entry, to prune dead-weight checks quantitatively.
+3. **Economic-calendar blackout** — manual date-list input to suppress signals around
+   FOMC/CPI releases.
 
 ## Notes & caveats
 
-- The VIX regime row uses the **daily** VIX close regardless of chart timeframe; the
-  current day's value updates in real time until the daily close.
+- The vol-index row uses the **daily** close regardless of chart timeframe; the
+  current day's value updates in real time until the daily close. Auto-selection
+  covers NDX/QQQ → VXN and RUT/IWM → RVX; everything else uses VIX (override in
+  settings).
 - On symbols with no volume data (many indices, some FX feeds), the VWAP and volume
-  rows show "n/a" and simply fail — lower the min-score threshold accordingly, or
-  chart the corresponding futures/ETF instead.
-- Auto-fib picks the highest high / lowest low of the lookback window. On strongly
-  trending charts with no meaningful swing, the retracement zone may be far from
+  rows show "n/a" and simply fail — set their weights to 0, or chart the
+  corresponding futures/ETF instead.
+- Divergences confirm **after** the pivot completes (default 2 bars) — that lag is
+  the price of a non-repainting signal.
+- Pivot-anchored fibs update only when a new swing pivot confirms; on strongly
+  trending charts with no meaningful swing the retracement zone may sit far from
   price — that check failing is by design ("no pullback edge here").
-- The checklist evaluates on the live bar; like all real-time indicators, values can
-  change until the bar closes. For conservative use, act only on closed bars.
+- The checklist evaluates on the live bar by default; enable **confirmed-bars-only
+  mode** for repaint-free signals at bar close.
+- Backtest results are estimates: fills, slippage, and commissions in the Strategy
+  Tester are idealised. Add commission/slippage in the strategy's Properties tab
+  before trusting any numbers.
