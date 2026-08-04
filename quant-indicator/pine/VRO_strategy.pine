@@ -1,0 +1,107 @@
+//@version=6
+// =============================================================================
+// VRO — Volatility-Regime Overlay (strategy version, for the Strategy Tester)
+// -----------------------------------------------------------------------------
+// Mirrors VRO_indicator.pine exactly, and adds order handling so the Strategy
+// Tester reproduces the Python backtest in ../backtest/.
+//
+// Execution model, chosen to match the research code and to avoid the two most
+// common ways a Pine backtest lies to you:
+//   * every decision is taken on a CLOSED bar and filled at the NEXT bar's open
+//     (process_orders_on_close is left false, and there is no request.security
+//     lookahead anywhere in this script)
+//   * commission and slippage are charged on every order
+//
+// The default settings are the ones tested in the README (200-bar MA, 12% target
+// volatility, no leverage). Turnover is deliberately low: the validated version
+// of this rule trades under one round trip per year, which is why costs barely
+// touch it. Raising the rebalance sensitivity will increase turnover and costs
+// well beyond anything that was tested.
+// =============================================================================
+
+strategy("VRO — Volatility-Regime Overlay (strategy)",
+     overlay              = true,
+     initial_capital      = 100000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 100,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.03,
+     slippage             = 2,
+     calc_on_every_tick   = false,
+     process_orders_on_close = false,
+     margin_long          = 0,
+     margin_short         = 0)
+
+// ---------------------------------------------------------------- inputs ----
+grpR = "Regime gate"
+maLen     = input.int(200,  "Trend MA length (bars)", minval = 20, group = grpR)
+useSlope  = input.bool(true, "Require the MA to be rising", group = grpR)
+slopeLen  = input.int(20,   "MA slope lookback (bars)", minval = 1, group = grpR)
+
+grpV = "Volatility targeting"
+useVolTgt = input.bool(true,  "Scale exposure by inverse volatility", group = grpV)
+volLen    = input.int(20,     "Realised-vol lookback (bars)", minval = 5, group = grpV)
+targetVol = input.float(12.0, "Target volatility (% annualised)", minval = 1, maxval = 100, step = 0.5, group = grpV)
+maxLev    = input.float(1.0,  "Maximum weight (1.0 = no leverage)", minval = 0.1, maxval = 5.0, step = 0.1, group = grpV)
+
+grpT = "Trading"
+rebalBand = input.float(15.0, "Rebalance band (pp of equity)", minval = 1, maxval = 100, step = 1, group = grpT,
+     tooltip = "Only rebalance when the target weight has drifted this many percentage points from the position actually held. Wider band = less turnover and lower costs.")
+
+grpW = "Backtest window"
+startDate = input.time(timestamp("1 Jan 1990"), "Start", group = grpW)
+endDate   = input.time(timestamp("1 Jan 2100"), "End",   group = grpW)
+inWindow  = time >= startDate and time <= endDate
+
+// ------------------------------------------------- annualisation factor ----
+barsPerYear() =>
+    switch
+        timeframe.ismonthly => 12.0   / math.max(timeframe.multiplier, 1)
+        timeframe.isweekly  => 52.0   / math.max(timeframe.multiplier, 1)
+        timeframe.isdaily   => 252.0  / math.max(timeframe.multiplier, 1)
+        timeframe.isminutes => 252.0 * 390.0 / math.max(timeframe.multiplier, 1)
+        timeframe.isseconds => 252.0 * 390.0 * 60.0 / math.max(timeframe.multiplier, 1)
+        => 252.0
+
+bpy = barsPerYear()
+
+// -------------------------------------------------------------- signals ----
+ma       = ta.sma(close, maLen)
+trendOk  = close > ma and (not useSlope or ma > ma[slopeLen])
+logRet   = math.log(close / close[1])
+realVol  = ta.stdev(logRet, volLen) * math.sqrt(bpy)
+
+volWeight = useVolTgt and not na(realVol) and realVol > 0 ? math.min(targetVol / 100.0 / realVol, maxLev) : maxLev
+targetW   = trendOk ? volWeight : 0.0
+
+warm = bar_index >= math.max(maLen + slopeLen, volLen) and not na(ma) and not na(realVol) and realVol > 0
+
+// ---------------------------------------------------------------- orders ----
+// Weight actually held right now, marked at the current close.
+heldW    = strategy.position_size * close / math.max(strategy.equity, 1)
+drift    = targetW - heldW
+targetQty = math.floor(targetW * strategy.equity / close)
+
+// Always act on a regime flip; otherwise only when drift exceeds the band. This
+// keeps turnover close to the low-turnover version that was actually validated.
+flip       = trendOk != trendOk[1]
+needRebal  = warm and inWindow and (flip or math.abs(drift) * 100 >= rebalBand)
+
+if needRebal
+    delta = targetQty - strategy.position_size
+    if targetQty <= 0
+        strategy.close_all(comment = "risk off")
+    else if delta > 0
+        strategy.order("VRO add",    strategy.long,  qty = delta,  comment = "scale up")
+    else if delta < 0
+        strategy.order("VRO reduce", strategy.short, qty = -delta, comment = "scale down")
+
+// close out at the end of the requested window so the equity curve is comparable
+if not inWindow and inWindow[1]
+    strategy.close_all(comment = "window end")
+
+// --------------------------------------------------------------- visuals ----
+plot(ma, "Trend MA", color = trendOk ? color.new(#1baf7a, 0) : color.new(#eb6834, 0), linewidth = 2)
+bgcolor(warm ? (trendOk ? color.new(#1baf7a, 92) : color.new(#eb6834, 92)) : na, title = "Regime")
+plot(targetW, "Target weight", color = color.new(#2a78d6, 100), display = display.data_window)
+plot(realVol * 100, "Realised vol %", color = color.new(#2a78d6, 100), display = display.data_window)

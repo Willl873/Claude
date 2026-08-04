@@ -1,0 +1,120 @@
+//@version=6
+// =============================================================================
+// VRO — Volatility-Regime Overlay
+// -----------------------------------------------------------------------------
+// This is a POSITION-SIZING indicator, not a buy/sell oracle. It answers one
+// question on every bar: how much of this asset should I be holding right now?
+//
+//   target weight = [ trend gate: 0 or 1 ] x min( target vol / realised vol, cap )
+//
+// Two ideas, both of which survive out-of-sample testing on 156 years of S&P 500
+// monthly total returns (see ../README.md for the full study):
+//
+//   1. TREND GATE. Hold the asset only while it trades above its long moving
+//      average and that average is rising. Over 1871-2026 this lifted Sharpe
+//      from 0.39 to 0.71 and cut the worst drawdown from -82% to -41%.
+//   2. VOLATILITY TARGETING. Scale exposure by inverse realised volatility.
+//      Volatility is persistent and forecastable in a way that returns are not.
+//      Added to the gate, Sharpe 0.75 and max drawdown -27%.
+//
+// WHAT THIS DOES NOT DO: it does not predict returns, it will not protect you
+// from an overnight crash (it needs a sustained decline to react), and in a long
+// uninterrupted bull market it will underperform buy & hold. Read the limitations
+// section of the README before trading it.
+// =============================================================================
+
+indicator("VRO — Volatility-Regime Overlay", overlay = true, max_labels_count = 100)
+
+// ---------------------------------------------------------------- inputs ----
+grpR = "Regime gate"
+maLen     = input.int(200,  "Trend MA length (bars)", minval = 20, group = grpR,
+     tooltip = "200 daily bars ~ the 10-month average validated on 156 years of data. The tested plateau runs 6-12 months; results decay beyond 14.")
+useSlope  = input.bool(true, "Require the MA to be rising", group = grpR)
+slopeLen  = input.int(20,   "MA slope lookback (bars)", minval = 1, group = grpR)
+
+grpV = "Volatility targeting"
+useVolTgt = input.bool(true,  "Scale exposure by inverse volatility", group = grpV)
+volLen    = input.int(20,     "Realised-vol lookback (bars)", minval = 5, group = grpV)
+targetVol = input.float(12.0, "Target volatility (% annualised)", minval = 1, maxval = 100, step = 0.5, group = grpV)
+maxLev    = input.float(1.0,  "Maximum weight (1.0 = no leverage)", minval = 0.1, maxval = 5.0, step = 0.1, group = grpV)
+
+grpD = "Display"
+showMA    = input.bool(true, "Plot trend MA", group = grpD)
+showBg    = input.bool(true, "Shade regime", group = grpD)
+showPanel = input.bool(true, "Show status panel", group = grpD)
+
+// ------------------------------------------------- annualisation factor ----
+// Realised volatility must be annualised with the right number of bars per year
+// for whatever timeframe the chart is on.
+barsPerYear() =>
+    switch
+        timeframe.ismonthly => 12.0   / math.max(timeframe.multiplier, 1)
+        timeframe.isweekly  => 52.0   / math.max(timeframe.multiplier, 1)
+        timeframe.isdaily   => 252.0  / math.max(timeframe.multiplier, 1)
+        timeframe.isminutes => 252.0 * 390.0 / math.max(timeframe.multiplier, 1)
+        timeframe.isseconds => 252.0 * 390.0 * 60.0 / math.max(timeframe.multiplier, 1)
+        => 252.0
+
+bpy = barsPerYear()
+
+// -------------------------------------------------------------- signals ----
+ma        = ta.sma(close, maLen)
+maRising  = ma > ma[slopeLen]
+trendOk   = close > ma and (not useSlope or maRising)
+
+logRet    = math.log(close / close[1])
+realVol   = ta.stdev(logRet, volLen) * math.sqrt(bpy)          // annualised, e.g. 0.18 = 18%
+volPctile = ta.percentrank(realVol, 100)                        // own-vol regime, 0-100
+
+volWeight = useVolTgt and not na(realVol) and realVol > 0 ? math.min(targetVol / 100.0 / realVol, maxLev) : maxLev
+targetW   = trendOk ? volWeight : 0.0
+
+// bars of data required before any of this is meaningful
+warm      = bar_index >= math.max(maLen + slopeLen, volLen + 100)
+targetW  := warm ? targetW : na
+
+// --------------------------------------------------------------- visuals ----
+maCol = trendOk ? color.new(#1baf7a, 0) : color.new(#eb6834, 0)
+plot(showMA ? ma : na, "Trend MA", color = maCol, linewidth = 2)
+bgcolor(showBg and warm ? (trendOk ? color.new(#1baf7a, 92) : color.new(#eb6834, 92)) : na, title = "Regime")
+
+// weight is also published as an invisible plot so it can be read by other
+// scripts, exported, or shown in the data window
+plot(targetW, "Target weight", color = color.new(#2a78d6, 100), display = display.data_window)
+plot(realVol * 100, "Realised vol %", color = color.new(#2a78d6, 100), display = display.data_window)
+plot(volPctile, "Vol percentile", color = color.new(#2a78d6, 100), display = display.data_window)
+
+// ---------------------------------------------------------- status panel ----
+var table panel = table.new(position.top_right, 2, 5, border_width = 1)
+
+fmtPct(x) => str.tostring(x * 100, "#.0") + "%"
+
+if showPanel and barstate.islast and warm
+    txt   = color.new(#0b0b0b, 0)
+    muted = color.new(#52514e, 0)
+    bg    = color.new(#ffffff, 10)
+    table.cell(panel, 0, 0, "VRO", text_color = txt, bgcolor = bg, text_size = size.normal)
+    table.cell(panel, 1, 0, trendOk ? "RISK ON" : "RISK OFF", bgcolor = bg,
+         text_color = trendOk ? #1baf7a : #eb6834, text_size = size.normal)
+    table.cell(panel, 0, 1, "Target weight", text_color = muted, bgcolor = bg)
+    table.cell(panel, 1, 1, fmtPct(targetW), text_color = txt, bgcolor = bg)
+    table.cell(panel, 0, 2, "Realised vol", text_color = muted, bgcolor = bg)
+    table.cell(panel, 1, 2, fmtPct(realVol), text_color = txt, bgcolor = bg)
+    table.cell(panel, 0, 3, "Vol percentile", text_color = muted, bgcolor = bg)
+    table.cell(panel, 1, 3, str.tostring(volPctile, "#") + " / 100", text_color = txt, bgcolor = bg)
+    table.cell(panel, 0, 4, "Price vs MA", text_color = muted, bgcolor = bg)
+    table.cell(panel, 1, 4, fmtPct(close / ma - 1.0), text_color = txt, bgcolor = bg)
+
+// ---------------------------------------------------------------- alerts ----
+riskOn  = trendOk and not trendOk[1] and warm
+riskOff = not trendOk and trendOk[1] and warm
+
+plotshape(riskOn,  "Risk on",  shape.triangleup,   location.belowbar, #1baf7a, size = size.small)
+plotshape(riskOff, "Risk off", shape.triangledown, location.abovebar, #eb6834, size = size.small)
+
+alertcondition(riskOn,  "VRO: regime turned RISK ON",  "VRO regime is RISK ON — rebuild the position toward the target weight.")
+alertcondition(riskOff, "VRO: regime turned RISK OFF", "VRO regime is RISK OFF — exit to cash.")
+
+// fires when the target weight drifts far enough from the last one to be worth a trade
+wChange = warm and not na(targetW[1]) and math.abs(targetW - targetW[1]) > 0.15
+alertcondition(wChange, "VRO: target weight moved >15pp", "VRO target weight changed materially — consider rebalancing.")
