@@ -104,6 +104,52 @@ is the fastest way to verify — it exposes every intermediate value.
 
 ---
 
+## Backtesting (`EntryGradeStrategy.pine`)
+
+A Pine indicator cannot be backtested — it has no entries or exits. `EntryGradeStrategy.pine`
+wraps the same scoring maths in a `strategy()` so TradingView's Strategy Tester can run
+it. The scoring block is **byte-identical** to `EntryGrade.pine` (396 lines, verify with
+`diff`), so the two cannot drift.
+
+**To run a 2017–2026 test:**
+
+1. Open a **daily** chart. TradingView caps intraday history by plan — 20k bars on 5m is
+   about three months, so a nine-year test is a daily exercise on every plan.
+2. Load history from **mid-2016 or earlier**. N = 100 means the score is `na` for the
+   first ~107 bars; the date window gates the *orders*, not the calculation, so warm-up
+   needs to finish before January 2017.
+3. Add the strategy. Start/End default to 2017-01-01 → 2027-01-01. Everything outside the
+   window is greyed out on the chart.
+4. **Check the trade count before reading anything else.** See below.
+
+**Default rules** (all inputs): enter when the score crosses above 65, exit on whichever
+comes first — score decays below 45, 2.0×ATR(14) stop, 3.0×ATR(14) target, or 20 bars
+held. Long-only, 100% of equity, 0.03% commission, 1 tick slippage.
+
+**Things that will make the numbers lie:**
+
+- **Sample size.** With `gamma = 1.0` the disagreement penalty parks most bars near 50, so
+  crossings above 65 are rare — expect tens of trades over nine years, not hundreds. Under
+  ~30 trades the Sharpe and profit factor are noise. To widen the score distribution, lower
+  `gamma` toward 0.5 rather than dropping the entry threshold into the mud.
+- **The exit dominates.** Change the exit and the equity curve transforms. That is the exit
+  talking, not the indicator. To isolate the score's contribution, hold the exit fixed and
+  vary only `entryThr`; if the curve doesn't improve monotonically as the threshold rises,
+  the score is not ranking entries on that symbol.
+- **Costs.** They default to non-zero deliberately. Zeroing them produces fiction, especially
+  at these holding periods.
+- **One symbol is not evidence.** A 2017–2026 equity run is one draw from a bull market.
+  Run the symbol list above and treat disagreement between them as the actual result.
+- **Long-only default is deliberate.** On a 2017–2026 equity index the short side loses on
+  drift alone, which says nothing about signal quality. Switch to Auto to test both sides and
+  expect the short leg to drag.
+
+Execution is next-bar-open: the score is a closed-bar value and orders fill at the following
+open. Do not set `process_orders_on_close = true` to improve the results — it would fill on
+data the signal already used.
+
+---
+
 ## Tuning the weights for trending vs range-bound instruments
 
 The three components are not regime-neutral, and the default 0.40 / 0.30 / 0.30

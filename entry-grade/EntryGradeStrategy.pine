@@ -1,0 +1,793 @@
+//@version=6
+// =============================================================================
+// ENTRY GRADE — STRATEGY
+// =============================================================================
+//
+// A backtestable wrapper around the Entry Grade indicator. The scoring maths in
+// the middle of this file (TIMEFRAME PLUMBING through COMPOSITE) is copied
+// VERBATIM from EntryGrade.pine so the two can be diffed and cannot drift; the
+// only things added here are a date window, entry/exit rules and order calls.
+//
+// -----------------------------------------------------------------------------
+// READ THIS BEFORE YOU TRUST A NUMBER
+// -----------------------------------------------------------------------------
+//   1. A 0-100 SCORE IS NOT A STRATEGY. There is nothing to backtest until you
+//      define an exit, and on any test the exit rule will dominate the result
+//      more than the score does. Every rule below is an input for exactly that
+//      reason. If you change the exit and the equity curve transforms, that is
+//      the exit talking, not the indicator.
+//
+//   2. INTRADAY HISTORY WILL NOT REACH 2017. TradingView caps intraday history
+//      by plan (roughly 5k-20k bars). On a 5m chart 20k bars is about three
+//      months, nowhere near 2017. A 2017-2026 test is a DAILY-chart exercise on
+//      every plan. On 1D the opening range is the first bar of the week, which
+//      is well defined — see SPEC NOTE 2 in the indicator.
+//
+//   3. WARM-UP EATS THE FIRST ~107 BARS. N=100 plus the variance-ratio lag means
+//      the score is na until bar 107. To have signals from Jan 2017 the chart
+//      must be loaded from mid-2016 or earlier. The date window below gates the
+//      ORDERS, not the calculation, so warm-up happens before the window opens.
+//
+//   4. EXECUTION IS NEXT-BAR-OPEN. The score is a closed-bar value and orders
+//      placed on a bar's close fill at the next bar's open. That one-bar gap is
+//      what makes this backtest honest — nothing fills at a price the signal
+//      could already see. Do not set process_orders_on_close = true to "improve"
+//      the results; it would be filling on data the signal used.
+//
+//   5. COSTS ARE ON BY DEFAULT. 0.03% commission per side and 1 tick of
+//      slippage. They are deliberately not zero. Set them to zero and the result
+//      is fiction, particularly for the short holding periods this produces.
+//
+//   6. EXPECT A SMALL SAMPLE. With gamma = 1.0 the disagreement penalty parks
+//      most bars near 50, so crossings above 65 are rare — likely tens of trades
+//      over nine years on a daily chart, not hundreds. CHECK THE TRADE COUNT
+//      FIRST. Under ~30 trades, the Sharpe and profit factor are noise and
+//      should not be reported as results. To widen the distribution, lower gamma
+//      toward 0.5 rather than dropping the entry threshold into the mud.
+//
+//   7. ONE SYMBOL IS NOT EVIDENCE. A single 2017-2026 equity run is one draw
+//      from one regime that happened to be a bull market. Run the list in
+//      README.md and treat disagreement between symbols as the real result.
+//
+// -----------------------------------------------------------------------------
+// DEFAULT TRADING RULES (all inputs, all changeable)
+// -----------------------------------------------------------------------------
+//   Direction   Long only. On a 2017-2026 equity index the short side loses on
+//               drift alone, which tells you nothing about signal quality and
+//               everything about the era. Switch to Auto to test both sides and
+//               expect the short leg to drag.
+//   Entry       score crosses above 65. Not 70: see note 6.
+//   Exit        whichever comes first —
+//                 score decays below 45
+//                 stop at 2.0 x ATR(14) from fill
+//                 target at 3.0 x ATR(14) from fill
+//                 time stop at 20 bars (matches the indicator's calibration H)
+//   Sizing      100% of equity, no pyramiding, $100k initial capital.
+// =============================================================================
+
+strategy("Entry Grade Strategy", "EG-S", overlay = true, max_bars_back = 1000, initial_capital = 100000, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, pyramiding = 0, commission_type = strategy.commission.percent, commission_value = 0.03, slippage = 1, calc_on_every_tick = false, process_orders_on_close = false)
+// =============================================================================
+// HELPERS
+// =============================================================================
+
+// Explicit clamp. Pine's math.max/min propagate na, so na in -> na out, which is
+// what we want everywhere a guard has already failed upstream.
+clamp(float x, float lo, float hi) =>
+    na(x) ? na : x < lo ? lo : x > hi ? hi : x
+
+// Cross-sectional POPULATION stdev over exactly three values (spec 5.2).
+// Not ta.stdev — that would be a stdev through time, which is not what the
+// disagreement penalty means. Divisor is 3, not 2.
+sd3(float a, float b, float c) =>
+    m = (a + b + c) / 3.0
+    math.sqrt(((a - m) * (a - m) + (b - m) * (b - m) + (c - m) * (c - m)) / 3.0)
+
+// Piecewise-linear interpolation across a small fixed knot table. Bounded loop
+// (<= 10 iterations), never a loop over history — satisfies spec 6.
+// Used to make the opening-range zone map smooth instead of stepped (spec 4.4).
+lerpKnots(float x, array<float> xs, array<float> ys) =>
+    n = array.size(xs)
+    float out = na
+    if n > 0 and not na(x)
+        if x <= array.get(xs, 0)
+            out := array.get(ys, 0)
+        else if x >= array.get(xs, n - 1)
+            out := array.get(ys, n - 1)
+        else if n > 1
+            // n > 1 is guaranteed by the two branches above (with a single knot
+            // one of them always matches), but Pine's `for` counts DOWN when
+            // to < from, so `for i = 0 to -1` would read index -1 and throw.
+            for i = 0 to n - 2
+                x0 = array.get(xs, i)
+                x1 = array.get(xs, i + 1)
+                if x >= x0 and x <= x1
+                    span = x1 - x0
+                    t = span <= 0 ? 0.0 : (x - x0) / span
+                    out := array.get(ys, i) + t * (array.get(ys, i + 1) - array.get(ys, i))
+                    break
+    out
+
+// Exponential step written by hand rather than ta.ema, because ta.ema latches to
+// na permanently once it ingests a single na — which would kill the score for
+// the rest of the chart after any warm-up or OR-forming gap.
+emaStep(float x, float prev, int len) =>
+    alpha = 2.0 / (len + 1)
+    na(x) ? prev : na(prev) ? x : alpha * x + (1.0 - alpha) * prev
+
+// na-safe display formatting for the tables.
+f2(float v) => na(v) ? "n/a" : str.tostring(v, "#.##")
+f1(float v) => na(v) ? "n/a" : str.tostring(v, "#.#")
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+// Scoring inputs below are identical to EntryGrade.pine — same names, same
+// defaults — so a setting tuned on the indicator transfers to the strategy
+// unchanged. hiThr/loThr and the calibration inputs are dropped: the Strategy
+// Tester's own report supersedes the calibration table.
+// =============================================================================
+GEN = "General"
+GA  = "A · Mean reversion"
+GB  = "B · VWAP"
+GC  = "C · Opening range"
+GM  = "Composite"
+GV  = "Visuals"
+
+dirMode      = input.string("Auto", "Direction mode", options = ["Long", "Short", "Auto"], group = GEN, tooltip = "Auto plots whichever side scores higher and labels it in the table.")
+src          = input.source(hlc3, "Source", group = GEN)
+confirmClose = input.bool(true, "Confirm on bar close", group = GEN, tooltip = "On: the score only advances on a closed bar (no intrabar wiggle). Off: updates live and the table shows a LIVE marker.")
+smoothLen    = input.int(1, "Smoothing — EMA of final score", minval = 1, maxval = 200, group = GEN, tooltip = "1 = off.")
+
+// --- Component A -------------------------------------------------------------
+wAin = input.float(0.40, "Weight — mean reversion", minval = 0.0, maxval = 1.0, step = 0.05, group = GA)
+N    = input.int(100, "Lookback N", minval = 10, maxval = 1000, group = GA, tooltip = "Spec gave no default. 100 chosen: long enough for a stable stdev, short enough to track regime. Raise to 600+ on sub-minute charts.")
+zMax = input.float(2.5, "zMax — z that pins the subscore at 0/100", minval = 0.5, maxval = 10.0, step = 0.1, group = GA)
+qVR  = input.int(5, "Variance ratio q", minval = 2, maxval = 50, group = GA)
+
+// --- Component B -------------------------------------------------------------
+wBin        = input.float(0.30, "Weight — VWAP", minval = 0.0, maxval = 1.0, step = 0.05, group = GB)
+anchorIn    = input.string("Auto", "VWAP anchor", options = ["Auto", "Session", "Week", "Month", "Year"], group = GB)
+dPeakLong   = input.float(-1.75, "Gaussian peak, long (sigma)", minval = -6.0, maxval = 0.0, step = 0.05, group = GB, tooltip = "Where the long subscore maxes out. The short peak is the mirror image, -dPeak.")
+dWidth      = input.float(1.5, "Gaussian width (sigma)", minval = 0.1, maxval = 6.0, step = 0.05, group = GB)
+slopeK      = input.int(10, "VWAP slope lookback k", minval = 1, maxval = 200, group = GB)
+slopeWeight = input.float(1.0, "Slope weight", minval = 0.0, maxval = 10.0, step = 0.1, group = GB, tooltip = "Spec gave no default. 1.0 chosen: slope is in sigma-per-bar, so a VWAP travelling ~1 sigma over k bars lands the multiplier near 1.1 and a strong trend reaches the 1.3 clamp.")
+
+// --- Component C -------------------------------------------------------------
+wCin       = input.float(0.30, "Weight — opening range", minval = 0.0, maxval = 1.0, step = 0.05, group = GC)
+orMinutes  = input.int(30, "Intraday OR length (minutes)", minval = 1, maxval = 1440, group = GC)
+retestBars = input.int(10, "Reclaim / retest window (bars)", minval = 1, maxval = 200, group = GC, tooltip = "Spec gave no default. 10 chosen: long enough for a reclaim to be a structure event, short enough that it is still 'recent'.")
+tzIn       = input.string("UTC", "24/7 anchor timezone", group = GC, tooltip = "Used only for 24/7 symbols, which have no session open to anchor to. IANA name or GMT offset, e.g. America/New_York or GMT-5.")
+sess247    = input.string("Auto", "Session handling", options = ["Auto", "Force 24/7 (midnight)", "Force exchange session"], group = GC)
+orForming  = input.string("Score na", "Before the OR completes", options = ["Score na", "Neutral 50"], group = GC)
+
+// --- Composite ---------------------------------------------------------------
+gamma = input.float(1.0, "Disagreement penalty gamma", minval = 0.0, maxval = 5.0, step = 0.1, group = GM, tooltip = "0 = penalty off. Higher = disagreement between components crushes the score toward 50 harder.")
+
+
+// --- Visuals -----------------------------------------------------------------
+showTable = input.bool(true, "Show info table", group = GV)
+showVwap  = input.bool(true, "Draw VWAP + bands on price", group = GV)
+showOr    = input.bool(true, "Draw opening range on price", group = GV)
+showTint  = input.bool(true, "Tint price background at extremes", group = GV)
+
+// --- Backtest window ---------------------------------------------------------
+// Gates the ORDERS only. The score still warms up on bars before the start date,
+// which is the point: by the time the window opens the indicator is already live.
+GT = "Backtest · window"
+startDate = input.time(timestamp("01 Jan 2017 00:00 +0000"), "Start", group = GT)
+endDate   = input.time(timestamp("01 Jan 2027 00:00 +0000"), "End",   group = GT, tooltip = "Any open position is flattened the moment price leaves the window, so the equity curve does not bleed past the end date.")
+
+// --- Trading rules -----------------------------------------------------------
+GX = "Backtest · rules"
+entryThr     = input.float(65.0, "Entry — score crosses above", minval = 50.0, maxval = 100.0, step = 1.0, group = GX, tooltip = "65 rather than 70: with gamma = 1.0 the disagreement penalty makes 70 crossings rare enough that a nine-year daily test can produce single-digit trade counts. Check the trade count before reading anything else.")
+useScoreExit = input.bool(true,  "Exit on score decay", group = GX)
+exitThr      = input.float(45.0, "    …below score",    minval = 0.0, maxval = 70.0, step = 1.0, group = GX)
+useStop      = input.bool(true,  "Exit on ATR stop",    group = GX)
+atrStopMult  = input.float(2.0,  "    stop × ATR(14)",  minval = 0.1, maxval = 20.0, step = 0.1, group = GX)
+useTarget    = input.bool(true,  "Exit on ATR target",  group = GX)
+atrTgtMult   = input.float(3.0,  "    target × ATR(14)",minval = 0.1, maxval = 20.0, step = 0.1, group = GX)
+useTimeStop  = input.bool(true,  "Exit on time stop",   group = GX)
+maxHold      = input.int(20,     "    max bars held",   minval = 1, maxval = 500, group = GX, tooltip = "Defaults to 20 to match the indicator's calibration horizon H, so the strategy is testing the same holding period the calibration table scores.")
+// =============================================================================
+// TIMEFRAME PLUMBING AND ANCHOR SELECTION
+// =============================================================================
+chartSec = timeframe.in_seconds(timeframe.period)
+isIntra  = chartSec < 86400
+
+// All timeframe.change() calls are UNCONDITIONAL and at global scope. Pine
+// evaluates both branches of a ternary for stateful builtins, so selecting a
+// timeframe string inside a ternary and calling change() on it would be wrong.
+chD = timeframe.change("D")
+chW = timeframe.change("W")
+chM = timeframe.change("M")
+
+// Quarter and year rollovers use calendar fields rather than timeframe.change
+// ("3M") / ("12M"). Both are lookahead-free; the calendar form is unambiguous
+// about where the boundary sits (Jan/Apr/Jul/Oct and Jan) regardless of how the
+// feed aligns multi-month bars. Design choice, stated per the spec's request.
+qtrNo = math.ceil(month / 3.0)
+chQ   = na(qtrNo[1]) or qtrNo != qtrNo[1]
+chY   = na(year[1])  or year  != year[1]
+
+// 24/7 detection. Crypto has no session open, so midnight in the user's chosen
+// timezone is the only sane anchor.
+is247    = sess247 == "Force 24/7 (midnight)" ? true : sess247 == "Force exchange session" ? false : syminfo.type == "crypto"
+dayTz    = dayofmonth(time, tzIn)
+newDayTz = nz(dayTz[1], -1) != dayTz
+
+// --- VWAP anchor (spec 3.1) --------------------------------------------------
+// <=15m session | >15m..<1D week | >=1D..<1W month | >=1W year.
+// The 4h..1D and 3D..1W gaps in the spec are folded into week and month.
+anchorAuto = chartSec <= 900 ? "Session" : chartSec < 86400 ? "Week" : chartSec < 604800 ? "Month" : "Year"
+anchorReq  = anchorIn == "Auto" ? anchorAuto : anchorIn
+// Guard: an anchor period at or below the chart TF would re-anchor every bar and
+// make VWAP meaningless. Fall back to the auto choice and flag it.
+anchorSec  = anchorReq == "Session" ? 86400 : anchorReq == "Week" ? 604800 : anchorReq == "Month" ? 2592000 : 31536000
+anchorBad  = anchorSec <= chartSec
+anchorEff  = anchorBad ? anchorAuto : anchorReq
+
+// Session rollover: for 24/7 use tz midnight, otherwise the daily rollover.
+// NOTE: on an extended-hours chart timeframe.change("D") fires at the ETH open,
+// so session VWAP starts at the ETH open while the OR (below) starts at the
+// REGULAR open. That is the conventional futures workflow, and it is what spec
+// 3.1 (timeframe.change) and spec 4.1 (regular session) each ask for separately.
+sessRoll  = is247 ? newDayTz : chD
+newAnchor = anchorEff == "Session" ? sessRoll : anchorEff == "Week" ? chW : anchorEff == "Month" ? chM : chY
+
+// =============================================================================
+// COMPONENT A — STATISTICAL MEAN REVERSION (spec 2)
+// =============================================================================
+
+// A.1 Log price. math.log of a non-positive source is na, which poisons the
+// whole chain by design — a symbol that can print <= 0 has no log-price z-score.
+priceOk = not na(src) and src > 0
+p       = priceOk ? math.log(src) : na
+
+// A.2 z-score of log price over N. Guard sd == 0 (a dead / illiquid tape).
+mu = ta.sma(p, N)
+sd = ta.stdev(p, N)
+z  = (na(sd) or sd <= 0.0 or na(mu) or na(p)) ? na : (p - mu) / sd
+
+// A.3 Ornstein-Uhlenbeck half-life via OLS of dp on p[1].
+// beta is the OLS slope written as corr * sd(y) / sd(x); a mean-reverting series
+// pulls back toward its mean, so beta < 0. beta outside (-1, 0) means either no
+// reversion (beta >= 0) or an oscillating / explosive fit (beta <= -1) — both
+// are reported as "no mean reversion detected" (na), never as a number.
+dp    = p - p[1]
+sdDp  = ta.stdev(dp, N)
+sdP1  = ta.stdev(p[1], N)
+corrB = ta.correlation(p[1], dp, N)
+beta  = (na(corrB) or na(sdDp) or na(sdP1) or sdP1 <= 0.0) ? na : corrB * sdDp / sdP1
+// log(1 + beta) is negative for beta in (-1, 0), so -log(2)/log(1+beta) > 0.
+halfLife = (not na(beta) and beta > -1.0 and beta < 0.0) ? -math.log(2.0) / math.log(1.0 + beta) : na
+
+// A.4 Variance ratio regime gate.
+// VR(q) = Var(q-bar returns) / (q * Var(1-bar returns)).
+// <1 mean-reverting, ~1 random walk, >1 trending. Overlapping q-bar returns
+// (Lo-MacKinlay); no small-sample bias correction, so VR reads slightly low.
+// The spec gave no VR window — using N so the gate and the z-score see the same
+// slice of history.
+r1 = p - p[1]
+rq = p - p[qVR]
+v1 = ta.variance(r1, N)
+vq = ta.variance(rq, N)
+vr = (na(v1) or v1 <= 0.0 or na(vq)) ? na : vq / (qVR * v1)
+// Confidence ramp: VR 0.70 -> 1.0, VR 1.15 -> 0.0. A flat tape (vr na) gets 0
+// confidence, which parks A at neutral rather than inventing a signal.
+wRegime = na(vr) ? 0.0 : clamp((1.15 - vr) / 0.45, 0.0, 1.0)
+
+// A.5 Raw subscores. Asymmetric by construction: a stretched-low z is a long
+// discount and a short chase, so the two are mirrored explicitly, not derived.
+aLongRaw  = na(z) ? 50.0 : clamp(50.0 - 50.0 * z / zMax, 0.0, 100.0)
+aShortRaw = na(z) ? 50.0 : clamp(50.0 + 50.0 * z / zMax, 0.0, 100.0)
+
+// A.6 Shrink toward neutral by regime confidence, then again by 0.5 if the
+// series shows no measurable pullback within the lookback — a stretched z-score
+// means nothing if nothing is pulling it back.
+hlShrink = (na(halfLife) or halfLife > N) ? 0.5 : 1.0
+aLong    = 50.0 + (aLongRaw  - 50.0) * wRegime * hlShrink
+aShort   = 50.0 + (aShortRaw - 50.0) * wRegime * hlShrink
+
+// =============================================================================
+// COMPONENT B — VWAP DISLOCATION (spec 3)
+// =============================================================================
+
+// B.1 / B.2 Anchored running accumulators. No loops, no request.security — the
+// sums reset on the anchor rollover detected above and accrue one bar at a time.
+var float sumV    = 0.0   // sum(v)
+var float sumPV   = 0.0   // sum(v*p)
+var float sumP2V  = 0.0   // sum(v*p^2)
+var float sumP    = 0.0   // sum(p)     -- TWAP fallback
+var float sumP2   = 0.0   // sum(p^2)   -- TWAP fallback
+var int   nAnchor = 0
+
+if newAnchor
+    sumV    := 0.0
+    sumPV   := 0.0
+    sumP2V  := 0.0
+    sumP    := 0.0
+    sumP2   := 0.0
+    nAnchor := 0
+
+vBar = nz(volume)
+sumV    := sumV   + vBar
+sumPV   := sumPV  + vBar * src
+sumP2V  := sumP2V + vBar * src * src
+sumP    := sumP   + src
+sumP2   := sumP2  + src * src
+nAnchor := nAnchor + 1
+
+// B.5 No-volume fallback. FX, cash indices and some CFDs report 0 volume, in
+// which case the volume-weighted mean is undefined; fall back to a plain TWAP
+// with an equal-weighted stdev over the same anchor window, and flag it.
+vwapDegraded = sumV <= 0.0
+
+float vwapVal = na
+float sdV     = na
+if vwapDegraded
+    vwapVal := nAnchor > 0 ? sumP / nAnchor : na
+    varT = nAnchor > 0 ? sumP2 / nAnchor - vwapVal * vwapVal : na
+    sdV := na(varT) ? na : math.sqrt(math.max(varT, 0.0))
+else
+    vwapVal := sumPV / sumV
+    // Numerically this can go slightly negative on near-constant price; the
+    // max(.,0) is the spec's guard and also the right floating-point defence.
+    varV = sumP2V / sumV - vwapVal * vwapVal
+    sdV := math.sqrt(math.max(varV, 0.0))
+
+// Dispersion in sigma. One bar into a new anchor sdV is 0, so d is na until the
+// window has spread — deliberately no signal from a one-bar VWAP.
+d = (na(sdV) or sdV <= 0.0 or na(vwapVal)) ? na : (src - vwapVal) / sdV
+
+// B.3 Hump-shaped mapping, NOT linear. A long improves as price discounts below
+// VWAP, peaks near d = -1.75, then decays past -3 because a deep extension is a
+// breakdown rather than a discount. Same Gaussian, mirrored for shorts.
+dPeakShort = -dPeakLong
+bLongRaw   = na(d) ? na : 100.0 * math.exp(-math.pow((d - dPeakLong)  / dWidth, 2) / 2.0)
+bShortRaw  = na(d) ? na : 100.0 * math.exp(-math.pow((d - dPeakShort) / dWidth, 2) / 2.0)
+
+// B.4 Slope adjustment, in sigma per bar. Buying a discount into a RISING VWAP
+// beats buying it into a falling one; shorting a premium into a FALLING VWAP
+// beats shorting into a rising one — hence the sign flip, not a copy.
+vwapPrev = vwapVal[slopeK]
+slope    = (na(sdV) or sdV <= 0.0 or na(vwapPrev) or na(vwapVal)) ? 0.0 : (vwapVal - vwapPrev) / (sdV * slopeK)
+bLong    = na(bLongRaw)  ? na : clamp(bLongRaw  * clamp(1.0 + slopeWeight * slope, 0.6, 1.3), 0.0, 100.0)
+bShort   = na(bShortRaw) ? na : clamp(bShortRaw * clamp(1.0 - slopeWeight * slope, 0.6, 1.3), 0.0, 100.0)
+
+// =============================================================================
+// COMPONENT C — OPENING RANGE (spec 4)
+// =============================================================================
+
+// C.1 Which bar starts a new opening range.
+//   intraday -> first bar of the REGULAR session (or tz midnight for 24/7)
+//   1D..3D   -> first bar of the week
+//   weekly   -> first bar of the month
+//   monthly  -> first bar of the quarter
+// See SPEC NOTE 2: this is deliberately not the VWAP anchor period.
+orNewIntra = is247 ? newDayTz : session.isfirstbar_regular
+orNewHtf   = chartSec < 604800 ? chW : chartSec < 2592000 ? chM : chQ
+orNew      = isIntra ? orNewIntra : orNewHtf
+
+// On a non-intraday chart the range IS the single first bar of the parent
+// period, so it is only frozen once that bar has closed — i.e. from the next
+// bar. Using it while it is still forming would be reading an unfinished high.
+// On intraday the window is wall-clock: bars whose OPEN time falls inside the
+// first orMinutes contribute. A bar that straddles the boundary is included
+// whole (Pine cannot split a bar) — flagged as OR>TF when chart TF > orMinutes.
+var float orHigh   = na
+var float orLow    = na
+var bool  orActive = false
+var bool  orDone   = false
+var int   orStart  = na
+var int   orDoneBar = na
+
+orJustDone = false
+
+if orNew
+    orHigh   := high
+    orLow    := low
+    orActive := true
+    orDone   := false
+    orStart  := time
+else if orActive
+    // REALTIME: on the forming bar these update tick by tick. That is correct —
+    // it is the range so far, not a future value. Pine rolls var state back at
+    // each tick, so the accumulation never double-counts.
+    stillIn = isIntra and not na(orStart) and (time - orStart) < orMinutes * 60000
+    if stillIn
+        orHigh := math.max(orHigh, high)
+        orLow  := math.min(orLow, low)
+    else
+        orActive   := false
+        orDone     := true
+        orDoneBar  := bar_index
+        orJustDone := true
+
+orRange = (na(orHigh) or na(orLow)) ? na : orHigh - orLow
+orMid   = (na(orHigh) or na(orLow)) ? na : (orHigh + orLow) / 2.0
+orValid = orDone and not na(orRange) and orRange > 0.0
+
+// C.3 Range quality. A coiled range makes a breakout more informative; a bloated
+// one makes it less. ta.atr must stay at global scope to keep its history
+// consistent, so it is computed unconditionally.
+atr14  = ta.atr(14)
+qRange = (not orValid or na(atr14) or atr14 <= 0.0) ? na : orRange / atr14
+wOR    = na(qRange) ? 1.0 : clamp(1.4 - 0.35 * qRange, 0.5, 1.25)
+
+// C.4 Position within the range, and its mirror. posShort = 1 - pos is the exact
+// geometric mirror; the ASYMMETRY between sides comes from the independent
+// breakout / reclaim state latched below, not from the position itself.
+posLong  = orValid ? (src - orLow) / orRange : na
+posShort = orValid ? (orHigh - src) / orRange : na
+
+// Structural state, latched per opening-range period and reset with it.
+var bool boLong     = false   // confirmed breakout above orHigh this period
+var bool boShort    = false   // confirmed breakdown below orLow this period
+var bool brokeBelow = false   // price traded below orLow after the OR froze
+var bool brokeAbove = false   // price traded above orHigh after the OR froze
+var int  reclaimLongBar  = na // bar_index of the last reclaim back over orLow
+var int  reclaimShortBar = na // bar_index of the last rejection back under orHigh
+
+if orNew
+    boLong          := false
+    boShort         := false
+    brokeBelow      := false
+    brokeAbove      := false
+    reclaimLongBar  := na
+    reclaimShortBar := na
+
+// Crossovers must be evaluated unconditionally (stateful builtins), but only
+// LATCHED once the range has been frozen for at least one bar — otherwise the
+// level jumping at the anchor rollover manufactures a fake cross.
+xUpLow  = ta.crossover(src, orLow)
+xDnHigh = ta.crossunder(src, orHigh)
+latchOk = orValid and not na(orDoneBar) and bar_index > orDoneBar
+
+if latchOk
+    if close > orHigh
+        boLong := true
+    if close < orLow
+        boShort := true
+    if low < orLow
+        brokeBelow := true
+    if high > orHigh
+        brokeAbove := true
+    // SPEC NOTE 1: the bullish "failed breakdown" is a prior breakdown plus a
+    // reclaim back over orLow. Mirrored for shorts as a failed breakout.
+    if xUpLow and brokeBelow
+        reclaimLongBar := bar_index
+    if xDnHigh and brokeAbove
+        reclaimShortBar := bar_index
+
+reclaimLong  = not na(reclaimLongBar)  and (bar_index - reclaimLongBar)  <= retestBars
+reclaimShort = not na(reclaimShortBar) and (bar_index - reclaimShortBar) <= retestBars
+
+// Zone map. Knots marked [spec] are given values; knots marked [choice] fill the
+// gaps the spec left open (SPEC NOTE 5).
+//   -1.00 [spec]   20  below the range, no reclaim — knife-catching
+//    0.00 [spec]   20  the range low itself
+//    0.20 [choice] 60  lower third INSIDE the range = buying support
+//    0.35 [spec]   45  chop zone begins — no edge
+//    0.65 [spec]   45  chop zone ends
+//    1.00 [choice] 90 if a breakout is confirmed, else 70 (poking the high)
+//    1.25 [spec]   90 if confirmed (flat 90 across 1.00..1.25), else 55
+//    2.50 [spec]   25  chasing extension
+//    4.00 [choice] 25  flat beyond, no further penalty to give
+// With a live reclaim the low zone is replaced by the 85 "failed breakdown"
+// value across [-0.15, +0.35], tapering back into chop by 0.65.
+hiEdgeL = boLong  ? 90.0 : 70.0
+retestL = boLong  ? 90.0 : 55.0
+hiEdgeS = boShort ? 90.0 : 70.0
+retestS = boShort ? 90.0 : 55.0
+
+// var arrays + array.set: allocated once, rewritten in place each bar. Building
+// them with array.from() inside a ternary would allocate two throwaway arrays
+// per bar for no benefit.
+var xsPos = array.from(-1.00, -0.15, 0.00, 0.20, 0.35, 0.65, 1.00, 1.25, 2.50, 4.00)
+var ysL   = array.new<float>(10, 0.0)
+var ysS   = array.new<float>(10, 0.0)
+
+array.set(ysL, 0, 20.0)
+array.set(ysL, 1, reclaimLong ? 85.0 : 20.0)
+array.set(ysL, 2, reclaimLong ? 85.0 : 20.0)
+array.set(ysL, 3, reclaimLong ? 85.0 : 60.0)
+array.set(ysL, 4, reclaimLong ? 65.0 : 45.0)
+array.set(ysL, 5, 45.0)
+array.set(ysL, 6, hiEdgeL)
+array.set(ysL, 7, retestL)
+array.set(ysL, 8, 25.0)
+array.set(ysL, 9, 25.0)
+
+array.set(ysS, 0, 20.0)
+array.set(ysS, 1, reclaimShort ? 85.0 : 20.0)
+array.set(ysS, 2, reclaimShort ? 85.0 : 20.0)
+array.set(ysS, 3, reclaimShort ? 85.0 : 60.0)
+array.set(ysS, 4, reclaimShort ? 65.0 : 45.0)
+array.set(ysS, 5, 45.0)
+array.set(ysS, 6, hiEdgeS)
+array.set(ysS, 7, retestS)
+array.set(ysS, 8, 25.0)
+array.set(ysS, 9, 25.0)
+
+cZoneL = lerpKnots(posLong,  xsPos, ysL)
+cZoneS = lerpKnots(posShort, xsPos, ysS)
+
+// C.5 [C_APPLY_WOR] Spec 4.5: multiply by wOR and clamp. See SPEC NOTE 3 — this
+// treats 0 as neutral rather than 50. For a 50-neutral shrink instead, replace
+// the two lines below with: 50 + (cZoneL - 50) * wOR  (and the short mirror).
+cLongCore  = na(cZoneL) ? na : clamp(cZoneL * wOR, 0.0, 100.0)
+cShortCore = na(cZoneS) ? na : clamp(cZoneS * wOR, 0.0, 100.0)
+
+// C.2 Nothing is scored before the range completes. Either the whole score goes
+// na, or C sits at neutral 50 with the OR-forming flag raised — user's call.
+orFormingFlag = not orValid
+cLong  = orValid ? cLongCore  : (orForming == "Neutral 50" ? 50.0 : na)
+cShort = orValid ? cShortCore : (orForming == "Neutral 50" ? 50.0 : na)
+
+// =============================================================================
+// COMPOSITE (spec 5)
+// =============================================================================
+
+// 5.1 Normalise weights to sum to 1. All-zero weights fall back to equal thirds
+// rather than dividing by zero.
+wSumIn = wAin + wBin + wCin
+wA = wSumIn > 0.0 ? wAin / wSumIn : 1.0 / 3.0
+wB = wSumIn > 0.0 ? wBin / wSumIn : 1.0 / 3.0
+wC = wSumIn > 0.0 ? wCin / wSumIn : 1.0 / 3.0
+
+// Warm-up guard (spec 6). N bars for the stdev, plus qVR for the q-bar returns,
+// plus one for the first difference.
+warmup = N + qVR + 2
+ready  = bar_index >= warmup and priceOk
+
+haveL = ready and not na(aLong)  and not na(bLong)  and not na(cLong)
+haveS = ready and not na(aShort) and not na(bShort) and not na(cShort)
+
+rawLong  = haveL ? wA * aLong  + wB * bLong  + wC * cLong  : na
+rawShort = haveS ? wA * aShort + wB * bShort + wC * cShort : na
+
+// 5.2 Disagreement penalty. Three components pointing in different directions is
+// not a signal, it is noise; a spread of 40+ zeroes the edge entirely.
+spreadLong  = haveL ? sd3(aLong,  bLong,  cLong)  : na
+spreadShort = haveS ? sd3(aShort, bShort, cShort) : na
+confLong    = na(spreadLong)  ? na : math.max(0.0, 1.0 - spreadLong  / 40.0)
+confShort   = na(spreadShort) ? na : math.max(0.0, 1.0 - spreadShort / 40.0)
+
+scoreLongRaw  = haveL ? 50.0 + (rawLong  - 50.0) * math.pow(confLong,  gamma) : na
+scoreShortRaw = haveS ? 50.0 + (rawShort - 50.0) * math.pow(confShort, gamma) : na
+
+// 5.3 Optional EMA smoothing (length 1 = off).
+var float emaL = na
+var float emaS = na
+emaL := emaStep(scoreLongRaw,  emaL, smoothLen)
+emaS := emaStep(scoreShortRaw, emaS, smoothLen)
+
+scoreLongSm  = smoothLen <= 1 ? scoreLongRaw  : (na(scoreLongRaw)  ? na : emaL)
+scoreShortSm = smoothLen <= 1 ? scoreShortRaw : (na(scoreShortRaw) ? na : emaS)
+
+// 6. Confirm on bar close. REALTIME: with this on, the held value is the last
+// CONFIRMED bar's score, so a forming bar cannot move the plot, the table or the
+// alerts. On historical bars every bar is confirmed, so held == live and history
+// and realtime agree exactly.
+var float heldL = na
+var float heldS = na
+doUpdate = not confirmClose or barstate.isconfirmed
+if doUpdate
+    heldL := scoreLongSm
+    heldS := scoreShortSm
+
+scoreLong  = confirmClose ? heldL : scoreLongSm
+scoreShort = confirmClose ? heldS : scoreShortSm
+
+// Direction resolution. In Auto, plot the better side and label it.
+autoLong = na(scoreLong) or na(scoreShort) ? true : scoreLong >= scoreShort
+sideLong = dirMode == "Long" ? true : dirMode == "Short" ? false : autoLong
+score    = dirMode == "Long" ? scoreLong : dirMode == "Short" ? scoreShort : (sideLong ? scoreLong : scoreShort)
+sideTxt  = na(score) ? "—" : (sideLong ? "LONG" : "SHORT")
+sideSign = sideLong ? 1 : -1
+
+// =============================================================================
+// STRATEGY LOGIC
+// =============================================================================
+
+// Order window. The score keeps calculating outside it — only the orders stop,
+// so warm-up happens on bars before the start date rather than eating into it.
+inWindow = time >= startDate and time <= endDate
+
+allowLong  = dirMode == "Long"  or dirMode == "Auto"
+allowShort = dirMode == "Short" or dirMode == "Auto"
+
+// Crossings are evaluated unconditionally at global scope: ta.crossover carries
+// state, so it has to see every bar or its history goes inconsistent.
+xLong  = ta.crossover(scoreLong,  entryThr)
+xShort = ta.crossover(scoreShort, entryThr)
+
+// A trade needs a live score AND a usable ATR — the stop distance depends on it.
+sigOk = inWindow and not na(atr14) and atr14 > 0.0
+flat  = strategy.position_size == 0
+
+// In Auto mode sideLong picks the stronger side, so only that side can trigger.
+// In Long/Short mode sideLong is pinned, so the other side never fires.
+longTrigger  = sigOk and allowLong  and sideLong     and xLong  and not na(scoreLong)
+shortTrigger = sigOk and allowShort and not sideLong and xShort and not na(scoreShort)
+
+// ATR is latched on the SIGNAL bar, not the fill bar, so the stop distance is
+// set from information the signal actually had.
+var float atrSig = na
+if longTrigger or shortTrigger
+    atrSig := atr14
+
+if flat and longTrigger
+    strategy.entry("Long", strategy.long)
+if flat and shortTrigger
+    strategy.entry("Short", strategy.short)
+
+// --- exits -------------------------------------------------------------------
+// strategy.exit is re-issued every bar while a position is open; that is how
+// TradingView keeps a resting bracket order alive.
+useBracket = useStop or useTarget
+avgPx = strategy.position_avg_price
+
+if useBracket and strategy.position_size > 0 and not na(avgPx) and not na(atrSig)
+    strategy.exit("X-Long", from_entry = "Long", stop = useStop ? avgPx - atrStopMult * atrSig : na, limit = useTarget ? avgPx + atrTgtMult * atrSig : na)
+if useBracket and strategy.position_size < 0 and not na(avgPx) and not na(atrSig)
+    strategy.exit("X-Short", from_entry = "Short", stop = useStop ? avgPx + atrStopMult * atrSig : na, limit = useTarget ? avgPx - atrTgtMult * atrSig : na)
+
+// Score decay is judged against the side actually HELD, never against the Auto
+// pick — otherwise a long could be held open by a rising short score.
+if useScoreExit and strategy.position_size > 0 and not na(scoreLong) and scoreLong < exitThr
+    strategy.close("Long", comment = "score decay")
+if useScoreExit and strategy.position_size < 0 and not na(scoreShort) and scoreShort < exitThr
+    strategy.close("Short", comment = "score decay")
+
+// entry_bar_index is read inside an if, not a ternary: Pine evaluates both
+// ternary branches, and calling it with no open trade is a runtime error.
+int barsHeld = 0
+if strategy.opentrades > 0
+    barsHeld := bar_index - strategy.opentrades.entry_bar_index(0)
+if useTimeStop and strategy.opentrades > 0 and barsHeld >= maxHold
+    strategy.close_all(comment = "time stop")
+
+// Flatten on leaving the window so the reported curve is exactly the period asked
+// for, rather than carrying a position past the end date.
+if not inWindow and strategy.position_size != 0
+    strategy.close_all(comment = "outside window")
+
+// =============================================================================
+// CHART OUTPUT
+// =============================================================================
+// The score is data-window only. This script is overlay = true, so plotting a
+// 0-100 series on the price pane would destroy the scale — run EntryGrade.pine
+// alongside it for the score pane, gradient and hlines.
+plot(score,      "score",      display = display.data_window)
+plot(scoreLong,  "scoreLong",  display = display.data_window)
+plot(scoreShort, "scoreShort", display = display.data_window)
+plot(aLong,      "A long",     display = display.data_window)
+plot(bLong,      "B long",     display = display.data_window)
+plot(cLong,      "C long",     display = display.data_window)
+plot(confLong,   "confidence", display = display.data_window)
+plot(barsHeld,   "bars held",  display = display.data_window)
+
+// Already overlay = true, so these need no force_overlay.
+vwapPlot = showVwap and ready ? vwapVal : na
+sig1Up   = showVwap and ready and not na(sdV) ? vwapVal + sdV : na
+sig1Dn   = showVwap and ready and not na(sdV) ? vwapVal - sdV : na
+plot(vwapPlot, "VWAP / TWAP", color = vwapDegraded ? color.new(color.orange, 0) : color.new(color.blue, 0), linewidth = 2, style = plot.style_linebr)
+plot(sig1Up,   "VWAP +1σ",    color = color.new(color.blue, 60), style = plot.style_linebr)
+plot(sig1Dn,   "VWAP -1σ",    color = color.new(color.blue, 60), style = plot.style_linebr)
+
+orHiPlot = showOr and orValid ? orHigh : na
+orLoPlot = showOr and orValid ? orLow  : na
+orMdPlot = showOr and orValid ? orMid  : na
+plot(orHiPlot, "OR High", color = color.new(color.teal, 10),   linewidth = 2, style = plot.style_linebr)
+plot(orLoPlot, "OR Low",  color = color.new(color.maroon, 10), linewidth = 2, style = plot.style_linebr)
+plot(orMdPlot, "OR Mid",  color = color.new(color.gray, 40),   style = plot.style_linebr)
+
+// Grey out everything outside the tested window, so it is obvious at a glance
+// which part of the chart the Strategy Tester numbers actually describe.
+// Explicit `color` annotation for the same reason as tintCol: the first ternary
+// branch is a bare na, and the annotation is what fixes the expression's type.
+color outOfWindowCol = inWindow ? na : color.new(color.gray, 88)
+bgcolor(outOfWindowCol, title = "Outside backtest window")
+
+color tintCol = not showTint or na(score) ? na : score > entryThr ? color.new(color.lime, 92) : score < exitThr ? color.new(color.red, 94) : na
+bgcolor(tintCol, title = "Entry Grade zone")
+
+bgcolor(tintCol, title = "Entry Grade extreme tint", force_overlay = true)
+
+// =============================================================================
+// INFO TABLE (spec 7)
+// =============================================================================
+// Degraded-data flags, assembled fresh each bar.
+flags = ""
+if vwapDegraded
+    flags := flags + "TWAP "
+if not priceOk
+    flags := flags + "BADPRICE "
+if orFormingFlag
+    flags := flags + "OR-FORMING "
+if isIntra and chartSec > orMinutes * 60
+    flags := flags + "OR>TF "
+if anchorBad
+    flags := flags + "ANCHOR-FALLBACK "
+if orValid and not na(qRange) and qRange > 2.0
+    flags := flags + "OR-BLOATED "
+if na(z)
+    flags := flags + "FLAT-TAPE "
+if flags == ""
+    flags := "none"
+
+var tbl = table.new(position.top_right, 3, 15, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 50))
+
+// Declared at GLOBAL scope — Pine does not allow function declarations inside an
+// if block. Writes into the `tbl` global above.
+tcell(col, row, s, bg) =>
+    table.cell(tbl, col, row, s, bgcolor = bg, text_color = chart.fg_color, text_size = size.small, text_halign = col == 0 ? text.align_left : text.align_right)
+
+// REALTIME: this only paints on the last bar, so it costs nothing on history.
+if showTable and barstate.islast
+    hdrBg = color.new(color.gray, 80)
+    rowBg = color.new(color.gray, 92)
+
+    liveTag = confirmClose ? "" : (barstate.isrealtime ? "  ● LIVE" : "")
+
+    structL = (boLong  ? "BO " : "") + (reclaimLong  ? "RECLAIM" : "")
+    structS = (boShort ? "BD " : "") + (reclaimShort ? "REJECT"  : "")
+
+    tcell(0, 0, "ENTRY GRADE" + liveTag, hdrBg)
+    tcell(1, 0, "LONG",  hdrBg)
+    tcell(2, 0, "SHORT", hdrBg)
+
+    tcell(0, 1, "Score", rowBg)
+    tcell(1, 1, f1(scoreLong),  sideLong and not na(score) ? color.new(color.lime, 70) : rowBg)
+    tcell(2, 1, f1(scoreShort), not sideLong and not na(score) ? color.new(color.red, 70) : rowBg)
+
+    tcell(0, 2, "Direction", rowBg)
+    tcell(1, 2, sideTxt, rowBg)
+    tcell(2, 2, dirMode, rowBg)
+
+    tcell(0, 3, "A · reversion  w=" + str.tostring(wA, "#.##"), rowBg)
+    tcell(1, 3, f1(aLong),  rowBg)
+    tcell(2, 3, f1(aShort), rowBg)
+
+    tcell(0, 4, "B · VWAP       w=" + str.tostring(wB, "#.##"), rowBg)
+    tcell(1, 4, f1(bLong),  rowBg)
+    tcell(2, 4, f1(bShort), rowBg)
+
+    tcell(0, 5, "C · open range w=" + str.tostring(wC, "#.##"), rowBg)
+    tcell(1, 5, f1(cLong),  rowBg)
+    tcell(2, 5, f1(cShort), rowBg)
+
+    tcell(0, 6, "Confidence", rowBg)
+    tcell(1, 6, f2(confLong),  rowBg)
+    tcell(2, 6, f2(confShort), rowBg)
+
+    tcell(0, 7, "z (log price)", rowBg)
+    tcell(1, 7, f2(z), rowBg)
+    tcell(2, 7, "wRegime " + f2(wRegime), rowBg)
+
+    tcell(0, 8, "Variance ratio", rowBg)
+    tcell(1, 8, f2(vr), rowBg)
+    tcell(2, 8, na(vr) ? "—" : vr < 0.9 ? "revert" : vr > 1.1 ? "trend" : "rand walk", rowBg)
+
+    tcell(0, 9, "Half-life (bars)", rowBg)
+    tcell(1, 9, f1(halfLife), rowBg)
+    tcell(2, 9, na(halfLife) or halfLife > N ? "shrunk ×0.5" : "ok", rowBg)
+
+    tcell(0, 10, "d (VWAP sigma)", rowBg)
+    tcell(1, 10, f2(d), rowBg)
+    tcell(2, 10, "anchor " + anchorEff, rowBg)
+
+    tcell(0, 11, "pos (OR)", rowBg)
+    tcell(1, 11, f2(posLong),  rowBg)
+    tcell(2, 11, f2(posShort), rowBg)
+
+    tcell(0, 12, "OR range / wOR", rowBg)
+    tcell(1, 12, f2(qRange) + "×ATR", rowBg)
+    tcell(2, 12, f2(wOR), rowBg)
+
+    tcell(0, 13, "Structure", rowBg)
+    tcell(1, 13, structL == "" ? "—" : structL, rowBg)
+    tcell(2, 13, structS == "" ? "—" : structS, rowBg)
+
+    tcell(0, 14, "Flags", rowBg)
