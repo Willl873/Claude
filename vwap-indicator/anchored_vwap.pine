@@ -1,0 +1,91 @@
+//@version=6
+// =============================================================================
+// Anchored VWAP (the fundamentals)
+// The classic, textbook VWAP: a single volume-weighted average price anchored
+// to a chosen period, surrounded by volume-weighted standard-deviation bands.
+//
+// This is the foundational reference every VWAP strategy is built on:
+//   - price above VWAP  -> buyers in control since the anchor
+//   - price below VWAP  -> sellers in control since the anchor
+//   - the sigma bands measure how stretched price is from that fair value
+//
+// Companion to multi_timeframe_vwap.pine (which layers day/yesterday/London).
+// =============================================================================
+indicator("Anchored VWAP + Bands", shorttitle="AVWAP", overlay = true)
+
+// ----------------------------------------------------------------------------- Inputs
+src       = input.source(hlc3, "Source", group = "General")
+anchorSel = input.string("Session / Day", "Anchor Period", options = ["Session / Day", "Week", "Month", "Quarter", "Year"], group = "General", tooltip = "When the VWAP accumulation resets to a fresh start.")
+bandBasis = input.string("Standard Deviation", "Band Basis", options = ["Standard Deviation", "Percentage"], group = "Bands", tooltip = "Standard Deviation: bands = VWAP ± mult × volume-weighted σ.\nPercentage: bands = VWAP × (1 ± pct%).")
+
+showB1 = input.bool(true,  "Band 1", inline = "b1", group = "Bands")
+mult1  = input.float(1.0,  "×",      inline = "b1", group = "Bands", step = 0.1)
+showB2 = input.bool(true,  "Band 2", inline = "b2", group = "Bands")
+mult2  = input.float(2.0,  "×",      inline = "b2", group = "Bands", step = 0.1)
+showB3 = input.bool(false, "Band 3", inline = "b3", group = "Bands")
+mult3  = input.float(3.0,  "×",      inline = "b3", group = "Bands", step = 0.1)
+
+vwapColor = input.color(color.new(#2962ff, 0),  "VWAP",  group = "Style")
+bandColor = input.color(color.new(#2962ff, 0),  "Bands", group = "Style")
+fillOn    = input.bool(true, "Fill between bands", group = "Style")
+
+// ----------------------------------------------------------------------------- Anchor reset
+// Map the selected anchor to the matching higher-timeframe change token.
+anchorTf = switch anchorSel
+    "Session / Day" => "D"
+    "Week"          => "W"
+    "Month"         => "M"
+    "Quarter"       => "3M"
+    "Year"          => "12M"
+newPeriod = timeframe.change(anchorTf)
+
+// ----------------------------------------------------------------------------- VWAP + volume-weighted σ
+var float sumPV  = na   // Σ price·volume
+var float sumV   = na   // Σ volume
+var float sumPV2 = na   // Σ price²·volume  (for variance)
+
+if newPeriod
+    sumPV  := 0.0
+    sumV   := 0.0
+    sumPV2 := 0.0
+
+vol = nz(volume)
+sumPV  += src * vol
+sumV   += vol
+sumPV2 += src * src * vol
+
+hasData = sumV > 0
+vwap    = hasData ? sumPV / sumV : na
+// Volume-weighted variance, clamped to avoid tiny negatives from float error.
+variance = hasData ? math.max(sumPV2 / sumV - vwap * vwap, 0.0) : na
+stdev    = hasData ? math.sqrt(variance) : na
+
+// ----------------------------------------------------------------------------- Band helper
+usePct = bandBasis == "Percentage"
+offset(mult) => usePct ? vwap * mult / 100.0 : stdev * mult
+
+up1 = vwap + offset(mult1)
+dn1 = vwap - offset(mult1)
+up2 = vwap + offset(mult2)
+dn2 = vwap - offset(mult2)
+up3 = vwap + offset(mult3)
+dn3 = vwap - offset(mult3)
+
+// ----------------------------------------------------------------------------- Plots
+// linebr so nothing draws a diagonal across the reset gap.
+pV  = plot(vwap, "VWAP", color = vwapColor, linewidth = 2, style = plot.style_linebr)
+
+pU1 = plot(showB1 ? up1 : na, "Upper 1", color = bandColor, style = plot.style_linebr)
+pD1 = plot(showB1 ? dn1 : na, "Lower 1", color = bandColor, style = plot.style_linebr)
+pU2 = plot(showB2 ? up2 : na, "Upper 2", color = bandColor, style = plot.style_linebr)
+pD2 = plot(showB2 ? dn2 : na, "Lower 2", color = bandColor, style = plot.style_linebr)
+pU3 = plot(showB3 ? up3 : na, "Upper 3", color = bandColor, style = plot.style_linebr)
+pD3 = plot(showB3 ? dn3 : na, "Lower 3", color = bandColor, style = plot.style_linebr)
+
+fill(pU1, pD1, color = fillOn and showB1 ? color.new(bandColor, 92) : na, title = "Band 1 fill")
+fill(pU2, pD2, color = fillOn and showB2 ? color.new(bandColor, 95) : na, title = "Band 2 fill")
+fill(pU3, pD3, color = fillOn and showB3 ? color.new(bandColor, 97) : na, title = "Band 3 fill")
+
+// ----------------------------------------------------------------------------- Alerts
+alertcondition(ta.crossover(close, vwap),  "Close crosses above VWAP", "Price crossed above VWAP")
+alertcondition(ta.crossunder(close, vwap), "Close crosses below VWAP", "Price crossed below VWAP")
