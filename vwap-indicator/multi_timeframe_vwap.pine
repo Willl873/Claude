@@ -1,0 +1,97 @@
+//@version=6
+// =============================================================================
+// Multi-Timeframe VWAP
+// Combines three volume-weighted average price references on one chart:
+//   1. Yesterday's VWAP    - the final VWAP value of the previous trading day,
+//                            carried forward as a horizontal reference line.
+//   2. London Session VWAP - VWAP that accumulates only during the London
+//                            session, reset at each London open.
+//   3. Current Day VWAP    - standard session VWAP anchored to the current day.
+//
+// Intended for intraday charts (1m - 1h). On daily+ timeframes the intraday
+// anchors have no meaning and the plots are suppressed.
+// =============================================================================
+indicator("Multi-Timeframe VWAP (Yesterday • London • Day)", shorttitle="MTF VWAP", overlay=true)
+
+// ----------------------------------------------------------------------------- Inputs
+srcInput      = input.source(hlc3,            "VWAP Source",       group = "General")
+hideOnHTF     = input.bool(true,              "Hide on daily+ timeframes", group = "General")
+
+showDay       = input.bool(true,              "Show Current Day VWAP", group = "Current Day")
+dayColor      = input.color(color.new(#2962ff, 0), "Day Color",     group = "Current Day")
+
+showYest      = input.bool(true,              "Show Yesterday VWAP",  group = "Yesterday")
+yestColor     = input.color(color.new(#787b86, 0), "Yesterday Color", group = "Yesterday")
+
+showLondon    = input.bool(true,              "Show London VWAP",     group = "London Session")
+londonSession = input.session("0800-1630",    "London Session",       group = "London Session")
+londonTz      = input.string("Europe/London", "Session Timezone",     group = "London Session", tooltip = "IANA timezone used to evaluate the London session window.")
+londonColor   = input.color(color.new(#ff9800, 0), "London Color",    group = "London Session")
+
+// ----------------------------------------------------------------------------- Guard
+// Only meaningful on intraday timeframes.
+isIntraday = timeframe.isintraday
+plotOk     = isIntraday or not hideOnHTF
+
+// ----------------------------------------------------------------------------- Current Day VWAP
+newDay = timeframe.change("D")
+
+var float dayPV = na
+var float dayV  = na
+if newDay
+    dayPV := 0.0
+    dayV  := 0.0
+dayPV += srcInput * volume
+dayV  += volume
+dayVWAP = dayV > 0 ? dayPV / dayV : na
+
+// ----------------------------------------------------------------------------- Yesterday VWAP
+// On the first bar of a new day, freeze the previous day's final VWAP value.
+var float yestVWAP = na
+if newDay
+    yestVWAP := dayVWAP[1]
+
+// ----------------------------------------------------------------------------- London Session VWAP
+inLondon    = not na(time(timeframe.period, londonSession, londonTz))
+londonStart = inLondon and not inLondon[1]
+
+var float londonPV   = 0.0
+var float londonV    = 0.0
+var float londonVWAP = na
+if londonStart
+    londonPV := 0.0
+    londonV  := 0.0
+if inLondon
+    londonPV += srcInput * volume
+    londonV  += volume
+    londonVWAP := londonV > 0 ? londonPV / londonV : na
+
+// ----------------------------------------------------------------------------- Plots
+plot(showDay    and plotOk ? dayVWAP    : na, "Current Day VWAP", color = dayColor,    linewidth = 2)
+plot(showYest   and plotOk ? yestVWAP   : na, "Yesterday VWAP",   color = yestColor,   linewidth = 1, style = plot.style_linebr)
+plot(showLondon and plotOk ? londonVWAP : na, "London VWAP",      color = londonColor, linewidth = 2, style = plot.style_linebr)
+
+// ----------------------------------------------------------------------------- End-of-line labels
+// Persistent labels are updated in place so they never stack on realtime ticks.
+showLabels = input.bool(true, "Show price labels", group = "General")
+
+var label dayLbl    = na
+var label yestLbl   = na
+var label londonLbl = na
+
+updLabel(lbl, show, price, txt, col) =>
+    label out = lbl
+    if showLabels and plotOk and barstate.islast and show and not na(price)
+        if na(out)
+            out := label.new(bar_index, price, txt, style = label.style_label_left, color = color.new(col, 85), textcolor = col, size = size.small)
+        else
+            label.set_xy(out, bar_index, price)
+            label.set_text(out, txt)
+    else if not na(out)
+        label.delete(out)
+        out := na
+    out
+
+dayLbl    := updLabel(dayLbl,    showDay,    dayVWAP,    "Day "    + str.tostring(dayVWAP,    format.mintick), dayColor)
+yestLbl   := updLabel(yestLbl,   showYest,   yestVWAP,   "Yest "   + str.tostring(yestVWAP,   format.mintick), yestColor)
+londonLbl := updLabel(londonLbl, showLondon, londonVWAP, "London " + str.tostring(londonVWAP, format.mintick), londonColor)
